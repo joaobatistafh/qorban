@@ -714,30 +714,167 @@ function exportExcel(){
 /* ============================================================
    12. PERSISTÊNCIA (window.storage)
    ============================================================ */
-const STORAGE_KEY = 'planejador_obras_sinapi:project';
+const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_psFslciJm9QIZTBkCiF77Q_SxA0hTaA';
+const SUPA_HEADERS = {
+  'apikey': SUPABASE_KEY,
+  'Authorization': 'Bearer ' + SUPABASE_KEY,
+  'Content-Type': 'application/json'
+};
+const LOCAL_PTR_KEY = 'planejador_obras_sinapi:current_project_id';
+const LOCAL_CACHE_KEY = 'planejador_obras_sinapi:cache'; // salva-vaidas offline
 
-async function saveProject(){
-  try{
-    const payload = {
-      name: document.getElementById('projName').value,
-      calendar,
-      activities: activities.map(a=>({id:a.id, code:a.code, qty:a.qty, predText:a.predText, roleAssign:a.roleAssign, expanded:a.expanded}))
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }catch(e){ /* ex: modo privado do navegador sem storage — silencioso */ }
+let currentProjectId = null;
+let saveDebounce = null;
+
+function setSyncStatus(text, isError){
+  const el = document.getElementById('syncStatus');
+  if(!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--red)' : 'var(--text-faint)';
 }
-async function loadProject(){
+
+async function supaRequest(path, options){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {headers: SUPA_HEADERS, ...options});
+  if(!res.ok){
+    const body = await res.text().catch(()=> '');
+    throw new Error(`Supabase ${res.status}: ${body}`);
+  }
+  return res.status===204 ? null : res.json();
+}
+
+async function supaListProjects(){
+  return supaRequest('projetos?select=id,nome,atualizado_em&order=atualizado_em.desc', {method:'GET'});
+}
+async function supaLoadProject(id){
+  const rows = await supaRequest(`projetos?id=eq.${id}&select=*`, {method:'GET'});
+  return rows && rows[0] ? rows[0] : null;
+}
+async function supaUpsertProject(row){
+  return supaRequest('projetos', {
+    method:'POST',
+    headers: {...SUPA_HEADERS, 'Prefer':'resolution=merge-duplicates,return=representation'},
+    body: JSON.stringify(row)
+  });
+}
+async function supaDeleteProject(id){
+  return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'});
+}
+
+function collectProjectPayload(){
+  return {
+    name: document.getElementById('projName').value,
+    calendar,
+    activities: activities.map(a=>({id:a.id, code:a.code, qty:a.qty, predText:a.predText, roleAssign:a.roleAssign, expanded:a.expanded}))
+  };
+}
+
+function saveProject(){
+  clearTimeout(saveDebounce);
+  saveDebounce = setTimeout(doSaveProject, 500);
+}
+
+async function doSaveProject(){
+  const payload = collectProjectPayload();
+  try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({id:currentProjectId, ...payload})); }catch(e){}
+  if(!currentProjectId){
+    currentProjectId = crypto.randomUUID();
+    try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
+  }
+  setSyncStatus('salvando…');
   try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){
-      const payload = JSON.parse(raw);
-      if(payload.name) document.getElementById('projName').value = payload.name;
-      if(payload.calendar) calendar = payload.calendar;
-      if(payload.activities) activities = payload.activities;
+    await supaUpsertProject({
+      id: currentProjectId,
+      nome: payload.name,
+      dados: {calendar: payload.calendar, activities: payload.activities},
+      atualizado_em: new Date().toISOString()
+    });
+    setSyncStatus('salvo no banco ✓');
+    refreshProjectSelect();
+  }catch(e){
+    console.error(e);
+    setSyncStatus('offline — salvo só neste navegador', true);
+  }
+}
+
+function applyProjectPayload(payload){
+  if(payload.name) document.getElementById('projName').value = payload.name;
+  if(payload.calendar) calendar = payload.calendar;
+  if(payload.activities) activities = payload.activities;
+}
+
+async function refreshProjectSelect(){
+  const sel = document.getElementById('projectSelect');
+  try{
+    const rows = await supaListProjects();
+    sel.innerHTML = rows.map(r=>`<option value="${r.id}" ${r.id===currentProjectId?'selected':''}>${escapeXml(r.nome||'(sem nome)')}</option>`).join('');
+  }catch(e){
+    sel.innerHTML = currentProjectId ? `<option value="${currentProjectId}" selected>${escapeXml(document.getElementById('projName').value)}</option>` : '';
+  }
+}
+
+async function loadProject(){
+  let ptr = null;
+  try{ ptr = localStorage.getItem(LOCAL_PTR_KEY); }catch(e){}
+
+  try{
+    if(ptr){
+      const row = await supaLoadProject(ptr);
+      if(row){
+        currentProjectId = row.id;
+        applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+        setSyncStatus('carregado do banco ✓');
+        await refreshProjectSelect();
+        return true;
+      }
+    }
+    // sem ponteiro local (ex: computador novo) — pega o projeto mais recente do banco
+    const rows = await supaListProjects();
+    if(rows && rows.length){
+      const row = await supaLoadProject(rows[0].id);
+      currentProjectId = row.id;
+      try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
+      applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+      setSyncStatus('carregado do banco ✓');
+      await refreshProjectSelect();
       return true;
     }
-  }catch(e){ /* nenhum projeto salvo ainda */ }
+  }catch(e){
+    console.error(e);
+    setSyncStatus('sem conexão com o banco — usando cópia local', true);
+    try{
+      const raw = localStorage.getItem(LOCAL_CACHE_KEY);
+      if(raw){
+        const payload = JSON.parse(raw);
+        currentProjectId = payload.id || null;
+        applyProjectPayload(payload);
+        return true;
+      }
+    }catch(e2){}
+  }
   return false;
+}
+
+async function switchProject(id){
+  const row = await supaLoadProject(id);
+  if(!row) return;
+  currentProjectId = row.id;
+  try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
+  applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+  renderCalendarTab();
+  recalcAll();
+}
+
+async function createNewProject(){
+  const nome = prompt('Nome do novo projeto:', 'Nova obra');
+  if(!nome) return;
+  currentProjectId = crypto.randomUUID();
+  try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
+  document.getElementById('projName').value = nome;
+  activities = []; nextActId = 1; calendar = defaultCalendar();
+  renderCalendarTab();
+  recalcAll();
+  await doSaveProject();
 }
 
 /* ============================================================
@@ -765,12 +902,12 @@ function setupTopbar(){
   document.getElementById('btnExport').addEventListener('click', exportExcel);
   document.getElementById('projName').addEventListener('change', saveProject);
   document.getElementById('btnReset').addEventListener('click', ()=>{
-    if(!confirm('Isso vai limpar todas as atividades do projeto atual. Continuar?')) return;
-    activities = []; nextActId = 1; calendar = defaultCalendar();
-    document.getElementById('projName').value = 'Novo projeto';
-    renderCalendarTab();
+    if(!confirm('Isso vai limpar todas as atividades deste projeto (o cadastro continua salvo no banco, só as atividades somem). Continuar?')) return;
+    activities = []; nextActId = 1;
     recalcAll();
   });
+  document.getElementById('btnNewProject').addEventListener('click', createNewProject);
+  document.getElementById('projectSelect').addEventListener('change', (e)=> switchProject(e.target.value));
   document.getElementById('btnUpdateSinapi').addEventListener('click', ()=> document.getElementById('sinapiUpload').click());
   document.getElementById('sinapiUpload').addEventListener('change', async (e)=>{
     const file = e.target.files[0];
@@ -818,7 +955,8 @@ function setupCalendarTab(){
   setupTopbar();
   setupCalendarTab();
   await loadSinapi();
-  await loadProject();
+  const had = await loadProject();
   renderCalendarTab();
   recalcAll();
+  if(!had) await doSaveProject(); // primeiro uso: cria o projeto padrão no banco
 })();

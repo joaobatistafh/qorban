@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
 :root{
   --bg: #14181d;
@@ -93,6 +94,12 @@ input,select{font-family:var(--sans);}
 .btn.ghost{background:transparent;}
 .btn.danger{color:var(--red);}
 .btn.small{padding:4px 9px;font-size:11.5px;}
+.btn.small.active{background:var(--accent);color:#241a08;border-color:var(--accent);font-weight:600;}
+.tr-orc-item td{background:#242b21;font-weight:600;color:var(--text);border-top:1px solid var(--line);}
+.tr-orc-item td:first-child{font-family:var(--mono);color:var(--accent);}
+.tr-orc-subitem td:first-child{font-family:var(--mono);color:var(--text-faint);font-size:11px;}
+#tblOrcamento thead th{white-space:normal;line-height:1.25;}
+#tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
 select.btn{appearance:none;-webkit-appearance:none;padding-right:26px;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%238b98a7'/></svg>");
   background-repeat:no-repeat;background-position:right 8px center;}
@@ -264,6 +271,9 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
     <button class="tab active" data-tab="atividades">Atividades <span class="count" id="cAtiv">0</span></button>
     <button class="tab" data-tab="cronograma">Cronograma &amp; Gantt</button>
     <button class="tab" data-tab="recursos">Recursos</button>
+    <button class="tab" data-tab="orcamento">Orçamento <span class="count" id="cOrc">0</span></button>
+    <button class="tab" data-tab="bdi">BDI</button>
+    <button class="tab" data-tab="dashboard">Dashboard</button>
     <button class="tab" data-tab="calendario">Calendário</button>
   </div>
 
@@ -348,6 +358,96 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
     </div>
   </div>
 
+  <!-- ===================== ORÇAMENTO ===================== -->
+  <div class="panel" id="panel-orcamento">
+    <div class="stats" id="orcStatsStrip"></div>
+    <div class="card">
+      <h2><span class="tag">EAP</span>Estrutura analítica do orçamento</h2>
+      <p class="desc">Cada linha é um <b>Item</b> (grupo/etapa, ex: "2 MURO") ou um <b>Subitem</b> (serviço com quantidade e custo, ex: "2.1 Retirada de tapume"). Informe o código SINAPI de um subitem para preencher MDO/MAT/EQUIP automaticamente — ou deixe em branco e digite os valores na mão.</p>
+      <div class="toolbar-row">
+        <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
+        <span class="hint" id="orcLoadStatus"></span>
+      </div>
+      <div class="tbl-wrap" style="overflow-x:auto;">
+        <table id="tblOrcamento">
+          <thead>
+            <tr>
+              <th colspan="4" style="text-align:center;background:#2a2216;">ORÇAMENTO</th>
+              <th colspan="3" style="text-align:center;background:#1f2d3a;">SINAPI</th>
+              <th colspan="4" style="text-align:center;background:#1f2d3a;">Custos reais</th>
+              <th colspan="5" style="text-align:center;background:#2a2216;">Custos sem BDI</th>
+              <th colspan="2" style="text-align:center;background:#1f2d3a;">Valores</th>
+              <th rowspan="2" style="width:70px;">Incid. (%)</th>
+              <th rowspan="2" style="width:26px;"></th>
+            </tr>
+            <tr>
+              <th style="width:56px;">Item</th>
+              <th style="min-width:220px;">Discriminação do evento</th>
+              <th style="width:80px;" class="num">Quant.</th>
+              <th style="width:60px;">Unid.</th>
+              <th style="width:150px;">SINAPI</th>
+              <th style="width:90px;" class="num">MDO (R$)</th>
+              <th style="width:90px;" class="num">Taxa extra MDO (R$)</th>
+              <th style="width:90px;" class="num">MAT (R$)</th>
+              <th style="width:90px;" class="num">Taxa extra MAT (R$)</th>
+              <th style="width:90px;" class="num">EQUIP (R$)</th>
+              <th style="width:80px;" class="num">Taxa extra EQUIP (%)</th>
+              <th style="width:100px;" class="num">Tot. sem BDI/unid.</th>
+              <th style="width:100px;" class="num">Tot. MDO sem BDI</th>
+              <th style="width:100px;" class="num">Tot. MAT sem BDI</th>
+              <th style="width:100px;" class="num">Tot. EQUIP sem BDI</th>
+              <th style="width:100px;" class="num">Total sem BDI</th>
+              <th style="width:100px;" class="num">Valor unit.</th>
+              <th style="width:100px;" class="num">Valor total</th>
+            </tr>
+          </thead>
+          <tbody id="tbodyOrcamento"></tbody>
+        </table>
+      </div>
+      <div class="empty-state" id="emptyOrcamento" style="display:none;">
+        <div class="big">Orçamento vazio</div>
+        Clique em "+ Adicionar linha" para começar, ou crie um novo projeto e escolha usar a EAP Padrão.
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== BDI ===================== -->
+  <div class="panel" id="panel-bdi">
+    <div class="card" style="max-width:480px;">
+      <h2><span class="tag">bdi</span>Bonificação e despesas indiretas</h2>
+      <p class="desc">Percentual aplicado sobre o custo sem BDI de cada subitem para chegar no "Valor unit." e "Valor total" do orçamento.</p>
+      <div class="field-row">
+        <label>BDI (%)</label>
+        <input type="number" id="bdiPercent" class="cell" step="0.01" min="0" value="0" style="max-width:120px;">
+      </div>
+      <p class="hint">Referências comuns de mercado para obras residenciais: 20% a 30% (varia com regime tributário, risco e administração local — ajuste conforme sua realidade).</p>
+    </div>
+  </div>
+
+  <!-- ===================== DASHBOARD ===================== -->
+  <div class="panel" id="panel-dashboard">
+    <div class="stats" id="dashStatsStrip"></div>
+    <div class="card">
+      <h2><span class="tag">curva abc</span>Curva ABC da obra</h2>
+      <p class="desc">Barras = valor de cada linha (maior para menor). Linha = percentual acumulado do orçamento. Faixa A cobre até 80% do valor total, B até 95%, C o restante.</p>
+      <div class="toolbar-row">
+        <div class="legend">
+          <span class="li"><span class="sw" style="background:var(--accent)"></span> Classe A (0–80%)</span>
+          <span class="li"><span class="sw" style="background:var(--blue)"></span> Classe B (80–95%)</span>
+          <span class="li"><span class="sw" style="background:var(--text-faint)"></span> Classe C (95–100%)</span>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn small active" id="btnAbcItens" data-level="item">Nível: Itens</button>
+          <button class="btn small" id="btnAbcSubitens" data-level="subitem">Nível: Subitens</button>
+        </div>
+      </div>
+      <div style="position:relative;height:420px;">
+        <canvas id="chartAbc"></canvas>
+      </div>
+      <div class="empty-state" id="emptyDashboard" style="display:none;">Sem dados de orçamento ainda.</div>
+    </div>
+  </div>
+
   <!-- ===================== CALENDARIO ===================== -->
   <div class="panel" id="panel-calendario">
     <div class="cal-grid">
@@ -383,6 +483,17 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="modal-overlay" id="modalOverlay" style="display:none;">
+  <div class="modal-box" id="modalBox"></div>
+</div>
+
+<style>
+.modal-overlay{position:fixed;inset:0;background:rgba(10,12,15,0.65);display:flex;align-items:center;justify-content:center;z-index:2000;}
+.modal-box{background:var(--bg-panel-raised);border:1px solid var(--line);border-radius:4px;padding:22px 24px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
+.modal-box h3{font-family:var(--disp);font-size:16px;margin:0 0 8px;}
+.modal-box p{color:var(--text-dim);font-size:13px;line-height:1.5;margin:0 0 18px;}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
+</style>
 
 <script src="app.js"></script>
 </body>

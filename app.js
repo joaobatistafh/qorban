@@ -9,6 +9,12 @@ let nextActId = 1;
 let calendar = null;
 let toastTimer = null;
 
+let orcamento = [];           // lista de linhas do orçamento (itens e subitens), em ordem de exibição
+let nextOrcId = 1;
+let bdiPercent = 0;
+let abcLevel = 'item';        // 'item' ou 'subitem' — granularidade do gráfico Curva ABC
+let abcChart = null;
+
 /* ---------------- utilidades ---------------- */
 function normalize(s){
   return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -29,6 +35,26 @@ function toISO(d){
 }
 function parseISO(s){ return new Date(s+'T00:00:00'); }
 function addDays(d, n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function showModal(title, message, buttons){
+  // buttons: [{label, value, primary?, danger?}]
+  return new Promise(resolve=>{
+    const overlay = document.getElementById('modalOverlay');
+    const box = document.getElementById('modalBox');
+    box.innerHTML = `
+      <h3>${title}</h3>
+      <p>${message}</p>
+      <div class="modal-actions">${buttons.map((b,i)=>`<button class="btn ${b.primary?'primary':''} ${b.danger?'danger':''}" data-mv="${i}">${b.label}</button>`).join('')}</div>
+    `;
+    overlay.style.display = 'flex';
+    function cleanup(v){ overlay.style.display='none'; resolve(v); }
+    box.querySelectorAll('[data-mv]').forEach(btn=>{
+      btn.addEventListener('click', ()=> cleanup(buttons[+btn.dataset.mv].value));
+    });
+    overlay.addEventListener('click', function outside(e){
+      if(e.target===overlay){ overlay.removeEventListener('click',outside); cleanup(null); }
+    });
+  });
+}
 function showToast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg; t.classList.add('show');
@@ -52,6 +78,15 @@ async function loadSinapi(){
     document.getElementById('loadStatus').textContent = 'Base SINAPI não encontrada. Envie a planilha analítica pelo botão "Atualizar base SINAPI" no topo.';
     console.error(e);
   }
+}
+
+let EAP_PADRAO = null;
+async function loadEapPadrao(){
+  if(EAP_PADRAO) return EAP_PADRAO;
+  const res = await fetch('eap_padrao.json');
+  if(!res.ok) throw new Error('http '+res.status);
+  EAP_PADRAO = await res.json();
+  return EAP_PADRAO;
 }
 
 /* Parser client-side de uma planilha SINAPI Analítico (mesmo layout oficial) */
@@ -141,6 +176,37 @@ function expandActivity(code, qty){
   const out = emptyBreakdown();
   mergeScaled(out, unit, qty);
   return out;
+}
+
+/* Preço (R$, Piauí) de um item da base — 3º elemento do array em DB.items[code] */
+function priceOf(code){
+  const item = DB.items[code];
+  if(!item || item.length<3) return null;
+  return (item[2]===undefined) ? null : item[2];
+}
+
+/* Dado um código de composição, retorna {mdo, mat, equip, semPreco} em R$ POR UNIDADE,
+   somando os leaves (mão de obra, material, equipamento) pelos preços da base SINAPI (PI).
+   semPreco = true se algum leaf não tinha preço cadastrado (soma parcial, sinaliza na UI). */
+function priceBreakdownUnit(code){
+  const b = computeUnitBreakdown(code);
+  let mdo=0, mat=0, equip=0, semPreco=false, temAlgo=false;
+  for(const c in b.roles){
+    temAlgo = true;
+    const p = priceOf(c);
+    if(p===null) semPreco = true; else mdo += p * b.roles[c].qty;
+  }
+  for(const c in b.materials){
+    temAlgo = true;
+    const p = priceOf(c);
+    if(p===null) semPreco = true; else mat += p * b.materials[c].qty;
+  }
+  for(const c in b.equip){
+    temAlgo = true;
+    const p = priceOf(c);
+    if(p===null) semPreco = true; else equip += p * b.equip[c].qty;
+  }
+  return {mdo, mat, equip, semPreco, temAlgo};
 }
 
 /* ============================================================
@@ -470,7 +536,8 @@ function onFieldChange(e){
 }
 
 /* ---------------- busca / autocomplete de código ---------------- */
-function setupCodeSearch(inp){
+function setupCodeSearch(inp, onSelect){
+  onSelect = onSelect || (()=> onFieldChange({target:inp}));
   let acp = null;
   function close(){ if(acp){ acp.remove(); acp=null; } }
   inp.addEventListener('input', ()=>{
@@ -504,7 +571,7 @@ function setupCodeSearch(inp){
         ev.preventDefault();
         inp.value = item.dataset.code;
         close();
-        onFieldChange({target:inp});
+        onSelect();
       });
     });
   });
@@ -615,7 +682,332 @@ function truncate(s,n){ return s.length>n ? s.slice(0,n-1)+'…' : s; }
 function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 /* ============================================================
-   9. CALENDÁRIO — render/eventos
+   9. ORÇAMENTO — EAP (itens/subitens), preços SINAPI e BDI
+   ============================================================ */
+function newOrcRow(level){
+  return {
+    id: nextOrcId++,
+    level, // 'item' | 'subitem'
+    nome: level==='item' ? 'Novo item' : 'Novo subitem',
+    quant: level==='subitem' ? 1 : null,
+    unidade: '',
+    sinapiCode: '',
+    mdo: 0, taxaMdo: 0,
+    mat: 0, taxaMat: 0,
+    equip: 0, taxaEquipPct: 0,
+    semPreco: false,
+  };
+}
+
+async function addOrcRow(){
+  const level = await showModal(
+    'Nova linha do orçamento',
+    'Essa linha é um <b>Item</b> (grupo/etapa, ex: "MURO") ou um <b>Subitem</b> (serviço com quantidade e custo, ex: "Retirada de tapume")?',
+    [
+      {label:'Item', value:'item'},
+      {label:'Subitem', value:'subitem', primary:true},
+      {label:'Cancelar', value:null},
+    ]
+  );
+  if(!level) return;
+  orcamento.push(newOrcRow(level));
+  recalcOrcamento();
+}
+
+async function loadEapPadraoIntoOrcamento(){
+  const eap = await loadEapPadrao();
+  orcamento = eap.map(([level, nome, code])=>({
+    id: nextOrcId++,
+    level,
+    nome,
+    quant: level==='subitem' ? 1 : null,
+    unidade: '',
+    sinapiCode: code || '',
+    mdo:0, taxaMdo:0, mat:0, taxaMat:0, equip:0, taxaEquipPct:0, semPreco:false,
+  }));
+  // pré-calcula os valores de quem já tem código SINAPI
+  orcamento.forEach(r=>{ if(r.level==='subitem' && r.sinapiCode) applySinapiPricing(r); });
+}
+
+function applySinapiPricing(row){
+  const code = parseInt(row.sinapiCode,10);
+  if(!code || !DB.items[code]){ row.semPreco=false; return; }
+  const pb = priceBreakdownUnit(code);
+  row.mdo = round2(pb.mdo);
+  row.mat = round2(pb.mat);
+  row.equip = round2(pb.equip);
+  row.semPreco = pb.semPreco;
+  row.unidade = row.unidade || (DB.items[code][1]||'');
+}
+function round2(n){ return Math.round(n*100)/100; }
+
+/* Recalcula numeração, rollups de item e totais — e re-renderiza tudo */
+function recalcOrcamento(){
+  // numeração + custo de cada subitem
+  let itemSeq = 0;
+  let subSeq = 0;
+  let grandTotal = 0;
+
+  orcamento.forEach(r=>{
+    if(r.level==='item'){
+      itemSeq++; subSeq=0;
+      r.numero = String(itemSeq);
+    } else {
+      subSeq++;
+      r.numero = `${itemSeq}.${subSeq}`;
+      const qty = r.quant||0;
+      const totalMdoUnit = (r.mdo||0) + (r.taxaMdo||0);
+      const totalMatUnit = (r.mat||0) + (r.taxaMat||0);
+      const totalEquipUnit = (r.equip||0) * (1 + (r.taxaEquipPct||0)/100);
+      const totalSemBdiUnit = totalMdoUnit + totalMatUnit + totalEquipUnit;
+      r.totalMdoUnit = totalMdoUnit;
+      r.totalMatUnit = totalMatUnit;
+      r.totalEquipUnit = totalEquipUnit;
+      r.totalSemBdiUnit = totalSemBdiUnit;
+      r.totalMdoSemBdi = totalMdoUnit*qty;
+      r.totalMatSemBdi = totalMatUnit*qty;
+      r.totalEquipSemBdi = totalEquipUnit*qty;
+      r.totalSemBdi = totalSemBdiUnit*qty;
+      r.valorUnit = totalSemBdiUnit*(1+(bdiPercent||0)/100);
+      r.valorTotal = r.valorUnit*qty;
+      grandTotal += r.valorTotal;
+    }
+  });
+
+  // rollup dos itens (soma dos subitens até o próximo item)
+  let curItem = null;
+  orcamento.forEach(r=>{
+    if(r.level==='item'){
+      curItem = r;
+      curItem.totalMdoSemBdi=0; curItem.totalMatSemBdi=0; curItem.totalEquipSemBdi=0;
+      curItem.totalSemBdi=0; curItem.valorTotal=0;
+    } else if(curItem){
+      curItem.totalMdoSemBdi += r.totalMdoSemBdi;
+      curItem.totalMatSemBdi += r.totalMatSemBdi;
+      curItem.totalEquipSemBdi += r.totalEquipSemBdi;
+      curItem.totalSemBdi += r.totalSemBdi;
+      curItem.valorTotal += r.valorTotal;
+    }
+  });
+
+  orcamento.forEach(r=>{
+    r.incidencia = grandTotal>0 ? (r.valorTotal/grandTotal*100) : 0;
+  });
+
+  window._orcGrandTotal = grandTotal;
+  renderOrcamento();
+  renderOrcStats();
+  renderDashboard();
+  saveProject();
+}
+
+function renderOrcStats(){
+  const strip = document.getElementById('orcStatsStrip');
+  if(!strip) return;
+  const total = window._orcGrandTotal || 0;
+  const nSub = orcamento.filter(r=>r.level==='subitem').length;
+  const semPreco = orcamento.filter(r=>r.level==='subitem' && r.sinapiCode && r.semPreco).length;
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Valor total do orçamento</div><div class="val" style="font-size:18px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Subitens</div><div class="val">${nSub}</div></div>
+    <div class="stat"><div class="lbl">BDI aplicado</div><div class="val">${fmtNum(bdiPercent,2)}<span class="unit">%</span></div></div>
+    ${semPreco>0?`<div class="stat"><div class="lbl">Atenção</div><div class="val" style="font-size:13px;color:var(--accent);">${semPreco} subitem(ns) com preço incompleto</div></div>`:''}
+  `;
+}
+
+function renderOrcamento(){
+  const tbody = document.getElementById('tbodyOrcamento');
+  document.getElementById('cOrc').textContent = orcamento.length;
+  document.getElementById('emptyOrcamento').style.display = orcamento.length ? 'none':'block';
+
+  tbody.innerHTML = orcamento.map(r=>{
+    if(r.level==='item'){
+      return `<tr class="tr-orc-item" data-orc="${r.id}">
+        <td>${r.numero}</td>
+        <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+        <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
+        <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+        <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
+      </tr>`;
+    }
+    const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
+    return `<tr class="tr-orc-subitem" data-orc="${r.id}">
+      <td>${r.numero}</td>
+      <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+      <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
+      <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
+      <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código…" autocomplete="off"></div> ${semPrecoBadge}</td>
+      <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaMat" data-orc="${r.id}" value="${fmtInput(r.taxaMat)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="equip" data-orc="${r.id}" value="${fmtInput(r.equip)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaEquipPct" data-orc="${r.id}" value="${fmtInput(r.taxaEquipPct)}" step="0.1"></td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalSemBdiUnit,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMdoSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMatSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalEquipSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.totalSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+      <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  bindOrcamentoEvents();
+}
+function fmtInput(n){ return (n===null||n===undefined||isNaN(n)) ? '' : (Math.round(n*100)/100); }
+function escapeAttr(s){ return String(s??'').replace(/"/g,'&quot;'); }
+
+function bindOrcamentoEvents(){
+  document.querySelectorAll('#tblOrcamento input[data-orcf]').forEach(inp=>{
+    if(inp.dataset.orcf==='sinapiCode'){
+      setupCodeSearch(inp, ()=>{
+        const row = orcamento.find(r=>r.id==inp.dataset.orc);
+        row.sinapiCode = inp.value.trim();
+        applySinapiPricing(row);
+        recalcOrcamento();
+      });
+    }
+    inp.addEventListener('change', ()=>{
+      const row = orcamento.find(r=>r.id==inp.dataset.orc);
+      const f = inp.dataset.orcf;
+      if(f==='nome') row.nome = inp.value;
+      else if(f==='unidade') row.unidade = inp.value;
+      else if(f==='quant') row.quant = parseFloat(inp.value)||0;
+      else if(f==='sinapiCode'){
+        row.sinapiCode = inp.value.trim();
+        applySinapiPricing(row);
+      }
+      else row[f] = parseFloat(inp.value)||0;
+      recalcOrcamento();
+    });
+  });
+  document.querySelectorAll('[data-orcremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      orcamento = orcamento.filter(r=>r.id!=btn.dataset.orcremove);
+      recalcOrcamento();
+    });
+  });
+}
+
+function setupBdiTab(){
+  const inp = document.getElementById('bdiPercent');
+  inp.value = bdiPercent;
+  inp.addEventListener('change', ()=>{
+    bdiPercent = parseFloat(inp.value)||0;
+    recalcOrcamento();
+  });
+}
+
+/* ---------------- Dashboard: Curva ABC ---------------- */
+function renderDashboard(){
+  const canvas = document.getElementById('chartAbc');
+  if(!canvas) return;
+  const rows = orcamento.filter(r=> r.level===abcLevel && (r.valorTotal||0) > 0)
+                         .sort((a,b)=> b.valorTotal - a.valorTotal);
+
+  document.getElementById('emptyDashboard').style.display = rows.length ? 'none' : 'block';
+  renderDashStats(rows);
+  if(rows.length===0){
+    if(abcChart){ abcChart.destroy(); abcChart=null; }
+    return;
+  }
+
+  const total = rows.reduce((s,r)=>s+r.valorTotal,0);
+  let acc = 0;
+  const labels = rows.map(r=>`${r.numero} ${truncate(r.nome,22)}`);
+  const values = rows.map(r=>r.valorTotal);
+  const cumPct = rows.map(r=>{ acc += r.valorTotal; return total>0 ? acc/total*100 : 0; });
+  const barColors = cumPct.map(p=> p<=80 ? '#e8a33d' : p<=95 ? '#5b9dd9' : '#5b6673');
+
+  if(abcChart) abcChart.destroy();
+  const ctx = canvas.getContext('2d');
+  abcChart = new Chart(ctx, {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Valor (R$)',
+          data: values,
+          backgroundColor: barColors,
+          yAxisID: 'y',
+          order: 2,
+        },
+        {
+          type: 'line',
+          label: 'Acumulado (%)',
+          data: cumPct,
+          borderColor: '#e7ebef',
+          backgroundColor: '#e7ebef',
+          borderWidth: 1.5,
+          pointRadius: 2,
+          yAxisID: 'y1',
+          order: 1,
+          tension: 0.15,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {mode:'index', intersect:false},
+      scales: {
+        x: { ticks:{ color:'#8b98a7', font:{size:10}, maxRotation:60, minRotation:40 }, grid:{ color:'#232a33' } },
+        y: { position:'left', ticks:{ color:'#8b98a7', callback:v=>'R$ '+fmtNum(v,0) }, grid:{ color:'#232a33' }, title:{display:true,text:'Valor (R$)',color:'#8b98a7'} },
+        y1:{ position:'right', min:0, max:100, ticks:{ color:'#8b98a7', callback:v=>v+'%' }, grid:{ drawOnChartArea:false }, title:{display:true,text:'Acumulado (%)',color:'#8b98a7'} },
+      },
+      plugins: {
+        legend: { labels:{ color:'#c7cdd4' } },
+        tooltip: {
+          callbacks: {
+            label: (ctx)=> ctx.dataset.type==='line'
+              ? `Acumulado: ${fmtNum(ctx.parsed.y,1)}%`
+              : `Valor: R$ ${fmtNum(ctx.parsed.y,2)}`
+          }
+        }
+      }
+    }
+  });
+}
+
+function renderDashStats(rows){
+  const strip = document.getElementById('dashStatsStrip');
+  if(!strip) return;
+  const total = rows.reduce((s,r)=>s+r.valorTotal,0);
+  let acc=0, classA=0, classB=0, classC=0;
+  rows.forEach(r=>{
+    acc += r.valorTotal;
+    const pct = total>0? acc/total*100 : 0;
+    if(pct<=80) classA++; else if(pct<=95) classB++; else classC++;
+  });
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Valor total (nível ${abcLevel==='item'?'itens':'subitens'})</div><div class="val" style="font-size:18px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Classe A</div><div class="val">${classA}<span class="unit">linhas</span></div></div>
+    <div class="stat"><div class="lbl">Classe B</div><div class="val">${classB}<span class="unit">linhas</span></div></div>
+    <div class="stat"><div class="lbl">Classe C</div><div class="val">${classC}<span class="unit">linhas</span></div></div>
+  `;
+}
+
+function setupDashboardTab(){
+  document.getElementById('btnAbcItens').addEventListener('click', (e)=>{
+    abcLevel='item';
+    document.getElementById('btnAbcItens').classList.add('active');
+    document.getElementById('btnAbcSubitens').classList.remove('active');
+    renderDashboard();
+  });
+  document.getElementById('btnAbcSubitens').addEventListener('click', (e)=>{
+    abcLevel='subitem';
+    document.getElementById('btnAbcSubitens').classList.add('active');
+    document.getElementById('btnAbcItens').classList.remove('active');
+    renderDashboard();
+  });
+}
+
+/* ============================================================
+   10. CALENDÁRIO — render/eventos
    ============================================================ */
 const WEEKDAY_NAMES = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
 
@@ -707,6 +1099,36 @@ function exportExcel(){
   Object.entries(equipTotals).forEach(([code,r])=>equipRows.push([code, r.desc, r.unit, Number(r.qty.toFixed(3))]));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(equipRows), 'Equipamentos');
 
+  if(orcamento.length){
+    const orcRows = [[
+      'Item','Discriminação do evento','Quant.','Unid.','SINAPI','MDO (R$)','Taxa extra MDO (R$)',
+      'MAT (R$)','Taxa extra MAT (R$)','EQUIP (R$)','Taxa extra EQUIP (%)','Total sem BDI/unid. (R$)',
+      'Total MDO sem BDI (R$)','Total MAT sem BDI (R$)','Total EQUIP sem BDI (R$)','Total sem BDI (R$)',
+      'Valor unit. (R$)','Valor total (R$)','Incidência (%)'
+    ]];
+    orcamento.forEach(r=>{
+      if(r.level==='item'){
+        orcRows.push([r.numero, r.nome,'','','','','','','','','','','','','',
+          Number((r.totalSemBdi||0).toFixed(2)),'', Number((r.valorTotal||0).toFixed(2)), Number((r.incidencia||0).toFixed(2))]);
+      } else {
+        orcRows.push([
+          r.numero, r.nome, r.quant||0, r.unidade||'', r.sinapiCode||'',
+          Number((r.mdo||0).toFixed(2)), Number((r.taxaMdo||0).toFixed(2)),
+          Number((r.mat||0).toFixed(2)), Number((r.taxaMat||0).toFixed(2)),
+          Number((r.equip||0).toFixed(2)), Number((r.taxaEquipPct||0).toFixed(2)),
+          Number((r.totalSemBdiUnit||0).toFixed(2)), Number((r.totalMdoSemBdi||0).toFixed(2)),
+          Number((r.totalMatSemBdi||0).toFixed(2)), Number((r.totalEquipSemBdi||0).toFixed(2)),
+          Number((r.totalSemBdi||0).toFixed(2)), Number((r.valorUnit||0).toFixed(2)),
+          Number((r.valorTotal||0).toFixed(2)), Number((r.incidencia||0).toFixed(2))
+        ]);
+      }
+    });
+    orcRows.push([]);
+    orcRows.push(['BDI aplicado (%)', bdiPercent]);
+    orcRows.push(['Valor total do orçamento (R$)', Number((window._orcGrandTotal||0).toFixed(2))]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(orcRows), 'Orcamento');
+  }
+
   const name = (document.getElementById('projName').value||'projeto').replace(/[^\w\- ]/g,'').trim() || 'projeto';
   XLSX.writeFile(wb, `Planejamento_${name}.xlsx`);
 }
@@ -765,7 +1187,9 @@ function collectProjectPayload(){
   return {
     name: document.getElementById('projName').value,
     calendar,
-    activities: activities.map(a=>({id:a.id, code:a.code, qty:a.qty, predText:a.predText, roleAssign:a.roleAssign, expanded:a.expanded}))
+    activities: activities.map(a=>({id:a.id, code:a.code, qty:a.qty, predText:a.predText, roleAssign:a.roleAssign, expanded:a.expanded})),
+    orcamento: orcamento.map(r=>({...r})),
+    bdiPercent
   };
 }
 
@@ -786,7 +1210,7 @@ async function doSaveProject(){
     await supaUpsertProject({
       id: currentProjectId,
       nome: payload.name,
-      dados: {calendar: payload.calendar, activities: payload.activities},
+      dados: {calendar: payload.calendar, activities: payload.activities, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -801,6 +1225,9 @@ function applyProjectPayload(payload){
   if(payload.name) document.getElementById('projName').value = payload.name;
   if(payload.calendar) calendar = payload.calendar;
   if(payload.activities) activities = payload.activities;
+  orcamento = payload.orcamento || [];
+  bdiPercent = payload.bdiPercent || 0;
+  nextOrcId = orcamento.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
 }
 
 async function refreshProjectSelect(){
@@ -822,7 +1249,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+        applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -834,7 +1261,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+      applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -860,9 +1287,11 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities});
+  applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
   renderCalendarTab();
+  document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
+  recalcOrcamento();
 }
 
 async function createNewProject(){
@@ -872,9 +1301,38 @@ async function createNewProject(){
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
   document.getElementById('projName').value = nome;
   activities = []; nextActId = 1; calendar = defaultCalendar();
+  orcamento = []; nextOrcId = 1; bdiPercent = 0;
+  document.getElementById('bdiPercent').value = 0;
+
+  const usarEap = await showModal(
+    'EAP Padrão',
+    'Quer começar este orçamento com a <b>EAP Padrão</b> (estrutura de itens e subitens já pronta, com alguns códigos SINAPI preenchidos)? Você pode editar tudo depois.',
+    [
+      {label:'Começar em branco', value:'nao'},
+      {label:'Usar EAP Padrão', value:'sim', primary:true},
+    ]
+  );
+  if(usarEap==='sim'){
+    setOrcLoadStatus('carregando EAP Padrão…');
+    try{
+      await loadEapPadraoIntoOrcamento();
+      setOrcLoadStatus('');
+    }catch(e){
+      console.error(e);
+      setOrcLoadStatus('não consegui carregar a EAP Padrão (eap_padrao.json) — comece manualmente.', true);
+    }
+  }
+
   renderCalendarTab();
   recalcAll();
+  recalcOrcamento();
   await doSaveProject();
+}
+function setOrcLoadStatus(text, isError){
+  const el = document.getElementById('orcLoadStatus');
+  if(!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--red)' : 'var(--text-faint)';
 }
 
 /* ============================================================
@@ -893,6 +1351,7 @@ function setupTabs(){
       tab.classList.add('active');
       document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
       if(tab.dataset.tab==='cronograma') renderGantt();
+      if(tab.dataset.tab==='dashboard') setTimeout(renderDashboard, 30);
     });
   });
 }
@@ -908,6 +1367,7 @@ function setupTopbar(){
   });
   document.getElementById('btnNewProject').addEventListener('click', createNewProject);
   document.getElementById('projectSelect').addEventListener('change', (e)=> switchProject(e.target.value));
+  document.getElementById('btnAddOrcItem').addEventListener('click', addOrcRow);
   document.getElementById('btnUpdateSinapi').addEventListener('click', ()=> document.getElementById('sinapiUpload').click());
   document.getElementById('sinapiUpload').addEventListener('change', async (e)=>{
     const file = e.target.files[0];
@@ -919,10 +1379,11 @@ function setupTopbar(){
       const parsed = parseSinapiWorkbook(wb);
       DB = parsed;
       unitMemo = {};
-      document.getElementById('dataStamp').textContent = `${DB.tops.length.toLocaleString('pt-BR')} composições carregadas (base atualizada nesta sessão)`;
+      document.getElementById('dataStamp').textContent = `${DB.tops.length.toLocaleString('pt-BR')} composições carregadas (sem preços — veja abaixo)`;
       document.getElementById('loadStatus').textContent = '';
-      showToast(`Base SINAPI atualizada: ${DB.tops.length} composições. Para tornar permanente, rode convert_sinapi.py e republique o sinapi_data.json.`);
+      showToast(`Base atualizada: ${DB.tops.length} composições. Atenção: esse upload rápido não traz preços (R$) para a aba Orçamento — só quantidades/horas. Para atualizar com preços, rode convert_sinapi.py com a planilha SINAPI completa e republique o sinapi_data.json.`);
       recalcAll();
+      recalcOrcamento();
     }catch(err){
       console.error(err);
       showToast('Não foi possível ler essa planilha. Confira se é o formato "Analítico" do SINAPI.');
@@ -954,9 +1415,13 @@ function setupCalendarTab(){
   setupTabs();
   setupTopbar();
   setupCalendarTab();
+  setupBdiTab();
+  setupDashboardTab();
   await loadSinapi();
   const had = await loadProject();
   renderCalendarTab();
+  document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
+  recalcOrcamento();
   if(!had) await doSaveProject(); // primeiro uso: cria o projeto padrão no banco
 })();

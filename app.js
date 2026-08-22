@@ -1,15 +1,13 @@
 /* ============================================================
-   PLANEJADOR DE OBRAS · Base SINAPI
+   CONTROLE · Base SINAPI
    ============================================================ */
 
 let DB = { items: {}, children: {}, tops: [] };
 let unitMemo = {};           // codigo -> {roles,materials,equip} POR UNIDADE (qty=1)
-let activities = [];         // lista de atividades do projeto
-let nextActId = 1;
 let calendar = null;
 let toastTimer = null;
 
-let orcamento = [];           // lista de linhas do orçamento (itens e subitens), em ordem de exibição
+let orcamento = [];           // lista de linhas do orçamento (itens e subitens) — também são as atividades do Planejamento
 let nextOrcId = 1;
 let bdiPercent = 0;
 let abcLevel = 'item';        // 'item' ou 'subitem' — granularidade do gráfico Curva ABC
@@ -35,6 +33,19 @@ function toISO(d){
 }
 function parseISO(s){ return new Date(s+'T00:00:00'); }
 function addDays(d, n){ const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function truncate(s,n){ return (s||'').length>n ? s.slice(0,n-1)+'…' : (s||''); }
+function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeAttr(s){ return String(s??'').replace(/"/g,'&quot;'); }
+function round2(n){ return Math.round(n*100)/100; }
+function fmtInput(n){ return (n===null||n===undefined||isNaN(n)) ? '' : round2(n); }
+
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'), 3200);
+}
+
 function showModal(title, message, buttons){
   // buttons: [{label, value, primary?, danger?}]
   return new Promise(resolve=>{
@@ -55,11 +66,36 @@ function showModal(title, message, buttons){
     });
   });
 }
-function showToast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>t.classList.remove('show'), 3200);
+
+function showDeleteConfirmModal(){
+  return new Promise(resolve=>{
+    const overlay = document.getElementById('modalOverlay');
+    const box = document.getElementById('modalBox');
+    box.innerHTML = `
+      <h3>Excluir obra</h3>
+      <p>Essa ação é permanente — apaga o orçamento, o cronograma e tudo mais deste projeto do banco de dados. Não tem como desfazer.</p>
+      <p>Para confirmar, digite <b>excluir</b> abaixo:</p>
+      <input type="text" id="delConfirmInput" class="cell" placeholder="digite: excluir" autocomplete="off">
+      <div class="modal-error" id="delConfirmError">Digite exatamente "excluir" para confirmar.</div>
+      <div class="modal-actions">
+        <button class="btn" id="delCancelBtn">Cancelar</button>
+        <button class="btn danger" id="delConfirmBtn">Excluir definitivamente</button>
+      </div>
+    `;
+    overlay.style.display='flex';
+    const inp = document.getElementById('delConfirmInput');
+    inp.focus();
+    function cleanup(v){ overlay.style.display='none'; resolve(v); }
+    document.getElementById('delCancelBtn').addEventListener('click', ()=>cleanup(false));
+    document.getElementById('delConfirmBtn').addEventListener('click', ()=>{
+      if(inp.value.trim().toLowerCase()==='excluir') cleanup(true);
+      else document.getElementById('delConfirmError').style.display='block';
+    });
+    inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter') document.getElementById('delConfirmBtn').click(); });
+    overlay.addEventListener('click', function outside(e){
+      if(e.target===overlay){ overlay.removeEventListener('click',outside); cleanup(false); }
+    });
+  });
 }
 
 /* ============================================================
@@ -75,7 +111,7 @@ async function loadSinapi(){
     document.getElementById('loadStatus').textContent = '';
   }catch(e){
     document.getElementById('dataStamp').textContent = 'falha ao carregar base — use "Atualizar base SINAPI"';
-    document.getElementById('loadStatus').textContent = 'Base SINAPI não encontrada. Envie a planilha analítica pelo botão "Atualizar base SINAPI" no topo.';
+    document.getElementById('loadStatus').textContent = 'Base SINAPI não encontrada. Envie a planilha atualizada pelo botão acima.';
     console.error(e);
   }
 }
@@ -186,34 +222,29 @@ function priceOf(code){
 }
 
 /* Dado um código de composição, retorna {mdo, mat, equip, semPreco} em R$ POR UNIDADE,
-   somando os leaves (mão de obra, material, equipamento) pelos preços da base SINAPI (PI).
-   semPreco = true se algum leaf não tinha preço cadastrado (soma parcial, sinaliza na UI). */
+   somando os leaves (mão de obra, material, equipamento) pelos preços da base SINAPI (PI). */
 function priceBreakdownUnit(code){
   const b = computeUnitBreakdown(code);
-  let mdo=0, mat=0, equip=0, semPreco=false, temAlgo=false;
+  let mdo=0, mat=0, equip=0, semPreco=false;
   for(const c in b.roles){
-    temAlgo = true;
     const p = priceOf(c);
     if(p===null) semPreco = true; else mdo += p * b.roles[c].qty;
   }
   for(const c in b.materials){
-    temAlgo = true;
     const p = priceOf(c);
     if(p===null) semPreco = true; else mat += p * b.materials[c].qty;
   }
   for(const c in b.equip){
-    temAlgo = true;
     const p = priceOf(c);
     if(p===null) semPreco = true; else equip += p * b.equip[c].qty;
   }
-  return {mdo, mat, equip, semPreco, temAlgo};
+  return {mdo, mat, equip, semPreco};
 }
 
 /* ============================================================
    3. CALENDÁRIO — feriados e jornada
    ============================================================ */
 function easterDate(year){
-  // algoritmo de Meeus/Jones/Butcher
   const a=year%19, b=Math.floor(year/100), c=year%100;
   const d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25);
   const g=Math.floor((b-f+1)/3), h=(19*a+b-d-g+15)%30;
@@ -282,7 +313,6 @@ function nextWorkday(date){
   return d;
 }
 function addWorkdaysSigned(date, n){
-  // desloca 'date' por n dias úteis (n pode ser negativo = antecipação)
   let d = new Date(date);
   if(n===0) return d;
   const step = n>0?1:-1;
@@ -312,7 +342,7 @@ function simulateActivity(earliestStart, roleHours){
   let guard = 0;
   while(true){
     guard++;
-    if(guard>20000) break; // proteção contra loop infinito
+    if(guard>20000) break;
     if(isWorkday(cur)){
       const dayHours = hoursOnDate(cur);
       let anyRemaining = false;
@@ -342,42 +372,149 @@ function parsePreds(text){
 }
 
 /* ============================================================
-   5. RECÁLCULO GERAL
+   5. ORÇAMENTO — criação/edição de linhas
+   ============================================================ */
+function newOrcRow(level){
+  return {
+    id: nextOrcId++,
+    level, // 'item' | 'subitem'
+    nome: level==='item' ? 'Novo item' : 'Novo subitem',
+    quant: level==='subitem' ? 1 : null,
+    unidade: '',
+    sinapiCode: '',
+    mdo: 0, taxaMdo: 0,
+    mat: 0, taxaMat: 0,
+    equip: 0, taxaEquipPct: 0,
+    semPreco: false,
+    predText: '', roleAssign: {}, expanded: false,
+  };
+}
+
+async function addOrcRow(){
+  const level = await showModal(
+    'Nova linha do orçamento',
+    'Essa linha é um <b>Item</b> (grupo/etapa, ex: "MURO") ou um <b>Subitem</b> (serviço com quantidade e custo, ex: "Retirada de tapume")?',
+    [
+      {label:'Item', value:'item'},
+      {label:'Subitem', value:'subitem', primary:true},
+      {label:'Cancelar', value:null},
+    ]
+  );
+  if(!level) return;
+  orcamento.push(newOrcRow(level));
+  recalcAll();
+}
+
+async function loadEapPadraoIntoOrcamento(){
+  const eap = await loadEapPadrao();
+  orcamento = eap.map(([level, nome, code])=>({
+    id: nextOrcId++,
+    level,
+    nome,
+    quant: level==='subitem' ? 1 : null,
+    unidade: '',
+    sinapiCode: code || '',
+    mdo:0, taxaMdo:0, mat:0, taxaMat:0, equip:0, taxaEquipPct:0, semPreco:false,
+    predText:'', roleAssign:{}, expanded:false,
+  }));
+  orcamento.forEach(r=>{ if(r.level==='subitem' && r.sinapiCode) applySinapiPricing(r); });
+}
+
+function applySinapiPricing(row){
+  const code = parseInt(row.sinapiCode,10);
+  if(!code || !DB.items[code]){ row.semPreco=false; return; }
+  const pb = priceBreakdownUnit(code);
+  row.mdo = round2(pb.mdo);
+  row.mat = round2(pb.mat);
+  row.equip = round2(pb.equip);
+  row.semPreco = pb.semPreco;
+  row.unidade = row.unidade || (DB.items[code][1]||'');
+}
+
+/* ============================================================
+   6. RECÁLCULO GERAL — numeração, custos, físico e cronograma
    ============================================================ */
 function recalcAll(){
-  // 1) expandir cada atividade (materiais/mão de obra/equip por unidade * qty)
-  activities.forEach(act=>{
-    if(!act.code || !DB.items[act.code]){
-      act.breakdown = emptyBreakdown();
-      act.valid = false;
-      return;
-    }
-    act.valid = true;
-    act.desc = DB.items[act.code][0];
-    act.unit = DB.items[act.code][1];
-    act.breakdown = expandActivity(act.code, act.qty || 0);
-    // roleAssign: qtyWorkers por função (mantém valores já definidos pelo usuário)
-    act.roleAssign = act.roleAssign || {};
-    for(const code in act.breakdown.roles){
-      if(!(code in act.roleAssign)) act.roleAssign[code] = 1;
+  // 1) numeração do orçamento (itens e subitens) + sequência de agendamento
+  let itemSeq = 0, subSeq = 0, seq = 0;
+  orcamento.forEach(r=>{
+    if(r.level==='item'){
+      itemSeq++; subSeq=0;
+      r.numero = String(itemSeq);
+    } else {
+      subSeq++; seq++;
+      r.numero = `${itemSeq}.${subSeq}`;
+      r.seq = seq;
     }
   });
 
-  // 2) agendar respeitando predecessoras (resolução iterativa)
-  const bySeq = {};
-  activities.forEach((a,i)=>{ a.seq = i+1; bySeq[a.seq]=a; a.preds = parsePreds(a.predText); a.scheduled=false; });
+  const subitens = orcamento.filter(r=>r.level==='subitem');
 
+  // 2) expandir cada subitem: físico (p/ cronograma e recursos) + custo (p/ orçamento)
+  subitens.forEach(r=>{
+    const code = parseInt(r.sinapiCode,10);
+    if(code && DB.items[code]){
+      r.valid = true;
+      r.desc = DB.items[code][0];
+      r.breakdown = expandActivity(code, r.quant||0);
+    } else {
+      r.valid = r.sinapiCode ? false : null;
+      r.breakdown = emptyBreakdown();
+    }
+    r.roleAssign = r.roleAssign || {};
+    for(const c in r.breakdown.roles){
+      if(!(c in r.roleAssign)) r.roleAssign[c] = 1;
+    }
+
+    const qty = r.quant||0;
+    const totalMdoUnit = (r.mdo||0) + (r.taxaMdo||0);
+    const totalMatUnit = (r.mat||0) + (r.taxaMat||0);
+    const totalEquipUnit = (r.equip||0) * (1 + (r.taxaEquipPct||0)/100);
+    const totalSemBdiUnit = totalMdoUnit + totalMatUnit + totalEquipUnit;
+    r.totalMdoUnit = totalMdoUnit;
+    r.totalMatUnit = totalMatUnit;
+    r.totalEquipUnit = totalEquipUnit;
+    r.totalSemBdiUnit = totalSemBdiUnit;
+    r.totalMdoSemBdi = totalMdoUnit*qty;
+    r.totalMatSemBdi = totalMatUnit*qty;
+    r.totalEquipSemBdi = totalEquipUnit*qty;
+    r.totalSemBdi = totalSemBdiUnit*qty;
+    r.valorUnit = totalSemBdiUnit*(1+(bdiPercent||0)/100);
+    r.valorTotal = r.valorUnit*qty;
+  });
+
+  // 3) rollup dos itens (soma dos subitens até o próximo item) + total geral
+  let curItem = null, grandTotal = 0;
+  orcamento.forEach(r=>{
+    if(r.level==='item'){
+      curItem = r;
+      curItem.totalMdoSemBdi=0; curItem.totalMatSemBdi=0; curItem.totalEquipSemBdi=0;
+      curItem.totalSemBdi=0; curItem.valorTotal=0;
+    } else if(curItem){
+      curItem.totalMdoSemBdi += r.totalMdoSemBdi;
+      curItem.totalMatSemBdi += r.totalMatSemBdi;
+      curItem.totalEquipSemBdi += r.totalEquipSemBdi;
+      curItem.totalSemBdi += r.totalSemBdi;
+      curItem.valorTotal += r.valorTotal;
+      grandTotal += r.valorTotal;
+    }
+  });
+  orcamento.forEach(r=>{ r.incidencia = grandTotal>0 ? (r.valorTotal/grandTotal*100) : 0; });
+  window._orcGrandTotal = grandTotal;
+
+  // 4) agendamento (predecessoras + calendário) — só entre subitens
+  const bySeq = {};
+  subitens.forEach(r=>{ bySeq[r.seq]=r; r.preds = parsePreds(r.predText); r.scheduled=false; });
   const projStart = parseISO(calendar.start);
   let progress = true, passes = 0;
-  while(progress && passes < activities.length+2){
+  while(progress && passes < subitens.length+2){
     progress = false; passes++;
-    for(const act of activities){
+    for(const act of subitens){
       if(act.scheduled) continue;
-      let earliest = projStart;
-      let ready = true;
+      let earliest = projStart, ready = true;
       for(const p of act.preds){
         const pred = bySeq[p.seq];
-        if(!pred || pred===act){ continue; }
+        if(!pred || pred===act) continue;
         if(!pred.scheduled){ ready=false; break; }
         const influence = addWorkdaysSigned(pred.end, p.lag);
         const candidate = p.lag>=0 ? addDays(influence,1) : influence;
@@ -385,21 +522,19 @@ function recalcAll(){
       }
       if(!ready) continue;
       const roleHours = {};
-      for(const code in act.breakdown.roles){
-        roleHours[code] = { hoursNeeded: act.breakdown.roles[code].qty, qtyWorkers: act.roleAssign[code]||1 };
+      for(const c in act.breakdown.roles){
+        roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 };
       }
       const sim = simulateActivity(earliest, roleHours);
       act.start = sim.start; act.end = sim.end; act.durationDays = sim.days;
-      act.scheduled = true;
-      progress = true;
+      act.scheduled = true; progress = true;
     }
   }
-  // atividades não resolvidas (ciclo de predecessoras) -> agenda a partir do início do projeto, isolada
-  activities.forEach(act=>{
+  subitens.forEach(act=>{
     if(!act.scheduled){
       const roleHours = {};
-      for(const code in act.breakdown.roles){
-        roleHours[code] = { hoursNeeded: act.breakdown.roles[code].qty, qtyWorkers: act.roleAssign[code]||1 };
+      for(const c in act.breakdown.roles){
+        roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 };
       }
       const sim = simulateActivity(projStart, roleHours);
       act.start=sim.start; act.end=sim.end; act.durationDays=sim.days; act.cyclic=true;
@@ -412,132 +547,121 @@ function recalcAll(){
   saveProject();
 }
 
+function renderAll(){
+  renderOrcamento();
+  renderOrcStats();
+  renderAtividades();
+  renderRecursos();
+  renderStats();
+  renderGantt();
+  renderDashboard();
+}
+
 /* ============================================================
-   6. RENDER — ATIVIDADES
+   7. RENDER — ORÇAMENTO
    ============================================================ */
-function fnLabel(desc){
-  // Encurta descrições longas de mão-de-obra tipo "SERVENTE COM ENCARGOS COMPLEMENTARES"
-  return desc.replace(/ COM ENCARGOS COMPLEMENTARES.*$/i,'').replace(/\(HORISTA\)/i,'').trim();
+function renderOrcStats(){
+  const strip = document.getElementById('orcStatsStrip');
+  if(!strip) return;
+  const total = window._orcGrandTotal || 0;
+  const subitens = orcamento.filter(r=>r.level==='subitem');
+  const nSub = subitens.length;
+  const semPreco = subitens.filter(r=>r.sinapiCode && r.semPreco).length;
+  const bdiMul = 1+(bdiPercent||0)/100;
+  const totalMdo = subitens.reduce((s,r)=>s+(r.totalMdoSemBdi||0),0)*bdiMul;
+  const totalMat = subitens.reduce((s,r)=>s+(r.totalMatSemBdi||0),0)*bdiMul;
+  const totalOutros = subitens.reduce((s,r)=>s+(r.totalEquipSemBdi||0),0)*bdiMul;
+  const pct = v => total>0 ? (v/total*100) : 0;
+
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Valor total do orçamento</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Valor total da mão de obra</div><div class="val" style="font-size:15px;">R$ ${fmtNum(totalMdo,2)} <span class="pct">(${fmtNum(pct(totalMdo),1)}%)</span></div></div>
+    <div class="stat"><div class="lbl">Valor total de materiais</div><div class="val" style="font-size:15px;">R$ ${fmtNum(totalMat,2)} <span class="pct">(${fmtNum(pct(totalMat),1)}%)</span></div></div>
+    <div class="stat"><div class="lbl">Outros valores (equip.)</div><div class="val" style="font-size:15px;">R$ ${fmtNum(totalOutros,2)} <span class="pct">(${fmtNum(pct(totalOutros),1)}%)</span></div></div>
+    <div class="stat"><div class="lbl">Subitens</div><div class="val">${nSub}</div></div>
+    ${semPreco>0?`<div class="stat"><div class="lbl">Atenção</div><div class="val" style="font-size:13px;color:var(--accent);">${semPreco} subitem(ns) com preço incompleto</div></div>`:''}
+  `;
 }
 
-function renderAtividades(){
-  const tbody = document.getElementById('tbodyAtividades');
-  tbody.innerHTML = '';
-  document.getElementById('cAtiv').textContent = activities.length;
-  document.getElementById('emptyAtividades').style.display = activities.length ? 'none':'block';
+function renderOrcamento(){
+  const tbody = document.getElementById('tbodyOrcamento');
+  document.getElementById('cOrc').textContent = orcamento.length;
+  document.getElementById('emptyOrcamento').style.display = orcamento.length ? 'none':'block';
 
-  activities.forEach((act, idx)=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><button class="icon-btn expand" data-act="${act.id}" title="Detalhar mão de obra">${act.expanded?'▾':'▸'}</button></td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${idx+1}</td>
-      <td></td>
-      <td>${act.valid===false && act.code ? '<span style="color:var(--red)">código não encontrado na base</span>' : (act.desc||'')}</td>
-      <td class="code">${act.unit||''}</td>
-      <td class="num"><input type="number" min="0" step="0.01" class="cell small" data-field="qty" data-act="${act.id}" value="${act.qty ?? ''}"></td>
-      <td><input type="text" class="cell mono" data-field="predText" data-act="${act.id}" placeholder="ex: 2+3" value="${act.predText||''}"></td>
-      <td class="num" style="font-family:var(--mono)">${act.durationDays? act.durationDays+'d':'-'} ${act.cyclic?'<span class="badge crit" title="Predecessora circular/ inválida">ciclo</span>':''}</td>
-      <td style="font-family:var(--mono);font-size:11.5px;">${fmtDate(act.start)}</td>
-      <td style="font-family:var(--mono);font-size:11.5px;">${fmtDate(act.end)}</td>
-      <td><button class="icon-btn" data-remove="${act.id}" title="Remover">✕</button></td>
-    `;
-    // code search cell
-    const codeTd = tr.children[2];
-    codeTd.innerHTML = `<div class="code-search"><input type="text" class="cell mono" data-field="code" data-act="${act.id}" placeholder="código ou descrição…" value="${act.code||''}" autocomplete="off"></div>`;
-    tbody.appendChild(tr);
-
-    if(act.expanded){
-      const subTr = document.createElement('tr');
-      subTr.className = 'row-sub';
-      const td = document.createElement('td');
-      td.colSpan = 11;
-      td.appendChild(buildRoleEditor(act));
-      subTr.appendChild(td);
-      tbody.appendChild(subTr);
-    }
-  });
-
-  bindActivityEvents();
-}
-
-function buildRoleEditor(act){
-  const wrap = document.createElement('div');
-  const roles = act.breakdown ? act.breakdown.roles : {};
-  const codes = Object.keys(roles);
-  if(codes.length===0){
-    wrap.innerHTML = `<span class="hint">Esta composição não possui mão de obra direta (H) identificada — verifique o código informado.</span>`;
-    return wrap;
-  }
-  let rowsHtml = '';
-  codes.forEach(code=>{
-    const r = roles[code];
-    const qtyW = act.roleAssign[code] || 1;
-    const dayHours = calendar.weekdays[1].hours || 8;
-    const daysNeeded = (r.qty>0) ? (r.qty/(qtyW*Math.max(dayHours,0.1))) : 0;
-    rowsHtml += `
-      <tr>
-        <td>${fnLabel(r.desc)}</td>
-        <td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)} h</td>
-        <td class="num"><input type="number" min="1" step="1" class="cell small" data-role-act="${act.id}" data-role-code="${code}" value="${qtyW}"></td>
-        <td class="num" style="font-family:var(--mono);color:var(--text-faint)">≈ ${fmtNum(daysNeeded,1)} dias</td>
+  tbody.innerHTML = orcamento.map(r=>{
+    if(r.level==='item'){
+      return `<tr class="tr-orc-item" data-orc="${r.id}">
+        <td>${r.numero}</td>
+        <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+        <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
+        <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+        <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
       </tr>`;
-  });
-  wrap.innerHTML = `
-    <div style="max-width:640px;">
-      <div class="hint" style="margin-bottom:8px;">Ajuste a quantidade de trabalhadores por função — a duração da atividade recalcula automaticamente (usa a função que demorar mais como gargalo).</div>
-      <table>
-        <thead><tr><th>Função</th><th class="num">Horas necessárias</th><th class="num">Qtd. trabalhadores</th><th class="num">Dias (isolado)</th></tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </div>`;
-  return wrap;
+    }
+    const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
+    return `<tr class="tr-orc-subitem" data-orc="${r.id}">
+      <td>${r.numero}</td>
+      <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+      <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
+      <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
+      <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${semPrecoBadge}</td>
+      <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaMat" data-orc="${r.id}" value="${fmtInput(r.taxaMat)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="equip" data-orc="${r.id}" value="${fmtInput(r.equip)}" step="0.01"></td>
+      <td class="num"><input type="number" class="cell small" data-orcf="taxaEquipPct" data-orc="${r.id}" value="${fmtInput(r.taxaEquipPct)}" step="0.1"></td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalSemBdiUnit,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMdoSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMatSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalEquipSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.totalSemBdi,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+      <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  bindOrcamentoEvents();
 }
 
-function bindActivityEvents(){
-  document.querySelectorAll('[data-act][data-field]').forEach(el=>{
-    el.addEventListener(el.tagName==='INPUT'?'change':'click', ()=>{});
-  });
-  document.querySelectorAll('input[data-field]').forEach(inp=>{
-    if(inp.dataset.field==='code'){ setupCodeSearch(inp); }
-    inp.addEventListener('change', onFieldChange);
-  });
-  document.querySelectorAll('input[data-role-act]').forEach(inp=>{
+function bindOrcamentoEvents(){
+  document.querySelectorAll('#tblOrcamento input[data-orcf]').forEach(inp=>{
+    if(inp.dataset.orcf==='sinapiCode'){
+      setupCodeSearch(inp, ()=>{
+        const row = orcamento.find(r=>r.id==inp.dataset.orc);
+        row.sinapiCode = inp.value.trim();
+        applySinapiPricing(row);
+        recalcAll();
+      });
+    }
     inp.addEventListener('change', ()=>{
-      const act = activities.find(a=>a.id==inp.dataset.roleAct);
-      const val = Math.max(1, parseFloat(inp.value)||1);
-      act.roleAssign[inp.dataset.roleCode] = val;
+      const row = orcamento.find(r=>r.id==inp.dataset.orc);
+      const f = inp.dataset.orcf;
+      if(f==='nome') row.nome = inp.value;
+      else if(f==='unidade') row.unidade = inp.value;
+      else if(f==='quant') row.quant = parseFloat(inp.value)||0;
+      else if(f==='sinapiCode'){
+        row.sinapiCode = inp.value.trim();
+        applySinapiPricing(row);
+      }
+      else row[f] = parseFloat(inp.value)||0;
       recalcAll();
     });
   });
-  document.querySelectorAll('[data-remove]').forEach(btn=>{
+  document.querySelectorAll('[data-orcremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      activities = activities.filter(a=>a.id!=btn.dataset.remove);
+      orcamento = orcamento.filter(r=>r.id!=btn.dataset.orcremove);
       recalcAll();
-    });
-  });
-  document.querySelectorAll('.icon-btn.expand').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const act = activities.find(a=>a.id==btn.dataset.act);
-      act.expanded = !act.expanded;
-      renderAtividades();
     });
   });
 }
 
-function onFieldChange(e){
-  const inp = e.target;
-  const act = activities.find(a=>a.id==inp.dataset.act);
-  if(!act) return;
-  const field = inp.dataset.field;
-  if(field==='qty') act.qty = parseFloat(inp.value)||0;
-  else if(field==='predText') act.predText = inp.value.trim();
-  else if(field==='code') act.code = inp.value.trim();
-  recalcAll();
-}
-
-/* ---------------- busca / autocomplete de código ---------------- */
+/* Busca por código OU descrição SINAPI, com autocomplete — usado no campo
+   "SINAPI" do Orçamento (único lugar de digitação do código no sistema). */
 function setupCodeSearch(inp, onSelect){
-  onSelect = onSelect || (()=> onFieldChange({target:inp}));
+  onSelect = onSelect || (()=>{});
   let acp = null;
   function close(){ if(acp){ acp.remove(); acp=null; } }
   inp.addEventListener('input', ()=>{
@@ -569,7 +693,7 @@ function setupCodeSearch(inp, onSelect){
     acp.querySelectorAll('.acp-item[data-code]').forEach(item=>{
       item.addEventListener('mousedown', (ev)=>{
         ev.preventDefault();
-        inp.value = item.dataset.code;
+        inp.value = item.dataset.code; // só o código fica salvo — a descrição foi só pra achar
         close();
         onSelect();
       });
@@ -579,11 +703,114 @@ function setupCodeSearch(inp, onSelect){
 }
 
 /* ============================================================
-   7. RENDER — RECURSOS CONSOLIDADOS
+   8. RENDER — PLANEJAMENTO (ex-Atividades, agora derivado do Orçamento)
+   ============================================================ */
+function fnLabel(desc){
+  return (desc||'').replace(/ COM ENCARGOS COMPLEMENTARES.*$/i,'').replace(/\(HORISTA\)/i,'').trim();
+}
+
+function renderAtividades(){
+  const tbody = document.getElementById('tbodyAtividades');
+  const subitens = orcamento.filter(r=>r.level==='subitem');
+  tbody.innerHTML = '';
+  document.getElementById('cAtiv').textContent = subitens.length;
+  document.getElementById('emptyAtividades').style.display = subitens.length ? 'none':'block';
+
+  subitens.forEach(act=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><button class="icon-btn expand" data-act="${act.id}" title="Detalhar mão de obra">${act.expanded?'▾':'▸'}</button></td>
+      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${act.seq}</td>
+      <td>${escapeXml(act.nome||'')}</td>
+      <td class="code" style="font-size:11.5px;">${act.sinapiCode || '<span style="color:var(--text-faint)">—</span>'}</td>
+      <td class="code">${act.unidade||''}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(act.quant,2)}</td>
+      <td><input type="text" class="cell mono" data-field="predText" data-act="${act.id}" placeholder="ex: 2+3" value="${act.predText||''}"></td>
+      <td class="num" style="font-family:var(--mono)">${act.durationDays? act.durationDays+'d':'-'} ${act.cyclic?'<span class="badge crit" title="Predecessora circular/ inválida">ciclo</span>':''}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;">${fmtDate(act.start)}</td>
+      <td style="font-family:var(--mono);font-size:11.5px;">${fmtDate(act.end)}</td>
+    `;
+    tbody.appendChild(tr);
+
+    if(act.expanded){
+      const subTr = document.createElement('tr');
+      subTr.className = 'row-sub';
+      const td = document.createElement('td');
+      td.colSpan = 10;
+      td.appendChild(buildRoleEditor(act));
+      subTr.appendChild(td);
+      tbody.appendChild(subTr);
+    }
+  });
+
+  bindActivityEvents();
+}
+
+function buildRoleEditor(act){
+  const wrap = document.createElement('div');
+  const roles = act.breakdown ? act.breakdown.roles : {};
+  const codes = Object.keys(roles);
+  if(codes.length===0){
+    wrap.innerHTML = `<span class="hint">${act.sinapiCode ? 'Esta composição não possui mão de obra direta (H) identificada.' : 'Este subitem não tem código SINAPI — sem cálculo automático de mão de obra/duração. Defina o código na aba Orçamento.'}</span>`;
+    return wrap;
+  }
+  let rowsHtml = '';
+  codes.forEach(code=>{
+    const r = roles[code];
+    const qtyW = act.roleAssign[code] || 1;
+    const dayHours = calendar.weekdays[1].hours || 8;
+    const daysNeeded = (r.qty>0) ? (r.qty/(qtyW*Math.max(dayHours,0.1))) : 0;
+    rowsHtml += `
+      <tr>
+        <td>${fnLabel(r.desc)}</td>
+        <td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)} h</td>
+        <td class="num"><input type="number" min="1" step="1" class="cell small" data-role-act="${act.id}" data-role-code="${code}" value="${qtyW}"></td>
+        <td class="num" style="font-family:var(--mono);color:var(--text-faint)">≈ ${fmtNum(daysNeeded,1)} dias</td>
+      </tr>`;
+  });
+  wrap.innerHTML = `
+    <div style="max-width:640px;">
+      <div class="hint" style="margin-bottom:8px;">Ajuste a quantidade de trabalhadores por função — a duração da atividade recalcula automaticamente (usa a função que demorar mais como gargalo).</div>
+      <table>
+        <thead><tr><th>Função</th><th class="num">Horas necessárias</th><th class="num">Qtd. trabalhadores</th><th class="num">Dias (isolado)</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+  return wrap;
+}
+
+function bindActivityEvents(){
+  document.querySelectorAll('#tblAtividades input[data-field="predText"]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const act = orcamento.find(r=>r.id==inp.dataset.act);
+      act.predText = inp.value.trim();
+      recalcAll();
+    });
+  });
+  document.querySelectorAll('input[data-role-act]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const act = orcamento.find(r=>r.id==inp.dataset.roleAct);
+      const val = Math.max(1, parseFloat(inp.value)||1);
+      act.roleAssign[inp.dataset.roleCode] = val;
+      recalcAll();
+    });
+  });
+  document.querySelectorAll('#tblAtividades .icon-btn.expand').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const act = orcamento.find(r=>r.id==btn.dataset.act);
+      act.expanded = !act.expanded;
+      renderAtividades();
+    });
+  });
+}
+
+/* ============================================================
+   9. RENDER — RECURSOS CONSOLIDADOS
    ============================================================ */
 function renderRecursos(){
+  const subitens = orcamento.filter(r=>r.level==='subitem');
   const roleTotals = {}, matTotals = {}, equipTotals = {};
-  activities.forEach(act=>{
+  subitens.forEach(act=>{
     if(!act.breakdown) return;
     for(const c in act.breakdown.roles){ addTo(roleTotals, c, act.breakdown.roles[c].desc, act.breakdown.roles[c].unit, act.breakdown.roles[c].qty); }
     for(const c in act.breakdown.materials){ addTo(matTotals, c, act.breakdown.materials[c].desc, act.breakdown.materials[c].unit, act.breakdown.materials[c].qty); }
@@ -607,31 +834,33 @@ function fillSimpleTable(sel, arr, rowFn){
 }
 
 /* ============================================================
-   8. RENDER — CRONOGRAMA / STATS / GANTT
+   10. RENDER — CRONOGRAMA / STATS / GANTT
    ============================================================ */
 function renderStats(){
   const strip = document.getElementById('statsStrip');
-  if(activities.length===0){ strip.innerHTML=''; return; }
-  const valid = activities.filter(a=>a.start && a.end);
+  const subitens = orcamento.filter(r=>r.level==='subitem');
+  if(subitens.length===0){ strip.innerHTML=''; return; }
+  const valid = subitens.filter(a=>a.start && a.end);
   const minStart = valid.length? new Date(Math.min(...valid.map(a=>a.start))) : null;
   const maxEnd = valid.length? new Date(Math.max(...valid.map(a=>a.end))) : null;
   const totalDays = (minStart&&maxEnd) ? Math.round((maxEnd-minStart)/86400000)+1 : 0;
-  let totalRoleHours=0; activities.forEach(a=>{ if(a.breakdown) for(const c in a.breakdown.roles) totalRoleHours+=a.breakdown.roles[c].qty; });
+  let totalRoleHours=0; subitens.forEach(a=>{ if(a.breakdown) for(const c in a.breakdown.roles) totalRoleHours+=a.breakdown.roles[c].qty; });
 
   strip.innerHTML = `
     <div class="stat accent"><div class="lbl">Duração total</div><div class="val">${totalDays}<span class="unit">dias corridos</span></div></div>
     <div class="stat"><div class="lbl">Início</div><div class="val" style="font-size:16px;">${fmtDate(minStart)}</div></div>
     <div class="stat"><div class="lbl">Término</div><div class="val" style="font-size:16px;">${fmtDate(maxEnd)}</div></div>
-    <div class="stat"><div class="lbl">Atividades</div><div class="val">${activities.length}</div></div>
+    <div class="stat"><div class="lbl">Atividades</div><div class="val">${subitens.length}</div></div>
     <div class="stat"><div class="lbl">Horas de mão de obra</div><div class="val">${fmtNum(totalRoleHours,0)}<span class="unit">h</span></div></div>
   `;
 }
 
 function renderGantt(){
   const wrap = document.getElementById('ganttWrap');
-  const valid = activities.filter(a=>a.start && a.end);
+  const subitens = orcamento.filter(r=>r.level==='subitem');
+  const valid = subitens.filter(a=>a.start && a.end);
   if(valid.length===0){
-    wrap.innerHTML = '<div class="empty-state">Adicione atividades para visualizar o cronograma.</div>';
+    wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>';
     return;
   }
   const minStart = new Date(Math.min(...valid.map(a=>a.start)));
@@ -646,7 +875,6 @@ function renderGantt(){
 
   let svg = `<svg width="${labelW+chartW}" height="${chartH}" style="display:block;font-family:var(--mono);">`;
 
-  // background stripes for non-workdays + month gridlines
   for(let i=0;i<totalDays;i++){
     const d = addDays(minStart,i);
     const x = labelW + i*dayW;
@@ -655,12 +883,11 @@ function renderGantt(){
     }
     if(d.getDate()===1){
       svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#333c47" stroke-width="1"/>`;
-      svg += `<text x="${x+3}" y="12" fill="#5b6673" font-size="9">${d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'})}</text>`;
+      svg += `<text x="${x+3}" y="12" fill="#8a94a1" font-size="9">${d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'})}</text>`;
     }
   }
   svg += `<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#1a1f26"/><line x1="0" y1="0" x2="0" y2="6" stroke="#2b333e" stroke-width="3"/></pattern></defs>`;
 
-  // today line
   if(today>=minStart && today<=maxEnd){
     const x = labelW + Math.round((today-minStart)/86400000)*dayW;
     svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#d9695b" stroke-width="1.5" stroke-dasharray="3,2"/>`;
@@ -671,237 +898,29 @@ function renderGantt(){
     const x = labelW + Math.round((act.start-minStart)/86400000)*dayW;
     const w = Math.max(dayW*0.6, Math.round((act.end-act.start)/86400000+1)*dayW - 2);
     const late = act.end < today ? 'var(--red)' : 'var(--accent)';
-    svg += `<text x="8" y="${y+15}" fill="#c7cdd4" font-size="11" font-family="Inter, sans-serif">${escapeXml(act.seq+'. '+truncate(act.desc||act.code||'—',30))}</text>`;
-    svg += `<rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${late}" opacity="0.9"><title>${escapeXml((act.desc||act.code)+' · '+fmtDate(act.start)+' a '+fmtDate(act.end))}</title></rect>`;
+    svg += `<text x="8" y="${y+15}" fill="#c7cdd4" font-size="11" font-family="Inter, sans-serif">${escapeXml(act.seq+'. '+truncate(act.nome||act.sinapiCode||'—',30))}</text>`;
+    svg += `<rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${late}" opacity="0.9"><title>${escapeXml((act.nome||act.sinapiCode)+' · '+fmtDate(act.start)+' a '+fmtDate(act.end))}</title></rect>`;
   });
 
   svg += `</svg>`;
   wrap.innerHTML = svg;
 }
-function truncate(s,n){ return s.length>n ? s.slice(0,n-1)+'…' : s; }
-function escapeXml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 /* ============================================================
-   9. ORÇAMENTO — EAP (itens/subitens), preços SINAPI e BDI
+   11. BDI
    ============================================================ */
-function newOrcRow(level){
-  return {
-    id: nextOrcId++,
-    level, // 'item' | 'subitem'
-    nome: level==='item' ? 'Novo item' : 'Novo subitem',
-    quant: level==='subitem' ? 1 : null,
-    unidade: '',
-    sinapiCode: '',
-    mdo: 0, taxaMdo: 0,
-    mat: 0, taxaMat: 0,
-    equip: 0, taxaEquipPct: 0,
-    semPreco: false,
-  };
-}
-
-async function addOrcRow(){
-  const level = await showModal(
-    'Nova linha do orçamento',
-    'Essa linha é um <b>Item</b> (grupo/etapa, ex: "MURO") ou um <b>Subitem</b> (serviço com quantidade e custo, ex: "Retirada de tapume")?',
-    [
-      {label:'Item', value:'item'},
-      {label:'Subitem', value:'subitem', primary:true},
-      {label:'Cancelar', value:null},
-    ]
-  );
-  if(!level) return;
-  orcamento.push(newOrcRow(level));
-  recalcOrcamento();
-}
-
-async function loadEapPadraoIntoOrcamento(){
-  const eap = await loadEapPadrao();
-  orcamento = eap.map(([level, nome, code])=>({
-    id: nextOrcId++,
-    level,
-    nome,
-    quant: level==='subitem' ? 1 : null,
-    unidade: '',
-    sinapiCode: code || '',
-    mdo:0, taxaMdo:0, mat:0, taxaMat:0, equip:0, taxaEquipPct:0, semPreco:false,
-  }));
-  // pré-calcula os valores de quem já tem código SINAPI
-  orcamento.forEach(r=>{ if(r.level==='subitem' && r.sinapiCode) applySinapiPricing(r); });
-}
-
-function applySinapiPricing(row){
-  const code = parseInt(row.sinapiCode,10);
-  if(!code || !DB.items[code]){ row.semPreco=false; return; }
-  const pb = priceBreakdownUnit(code);
-  row.mdo = round2(pb.mdo);
-  row.mat = round2(pb.mat);
-  row.equip = round2(pb.equip);
-  row.semPreco = pb.semPreco;
-  row.unidade = row.unidade || (DB.items[code][1]||'');
-}
-function round2(n){ return Math.round(n*100)/100; }
-
-/* Recalcula numeração, rollups de item e totais — e re-renderiza tudo */
-function recalcOrcamento(){
-  // numeração + custo de cada subitem
-  let itemSeq = 0;
-  let subSeq = 0;
-  let grandTotal = 0;
-
-  orcamento.forEach(r=>{
-    if(r.level==='item'){
-      itemSeq++; subSeq=0;
-      r.numero = String(itemSeq);
-    } else {
-      subSeq++;
-      r.numero = `${itemSeq}.${subSeq}`;
-      const qty = r.quant||0;
-      const totalMdoUnit = (r.mdo||0) + (r.taxaMdo||0);
-      const totalMatUnit = (r.mat||0) + (r.taxaMat||0);
-      const totalEquipUnit = (r.equip||0) * (1 + (r.taxaEquipPct||0)/100);
-      const totalSemBdiUnit = totalMdoUnit + totalMatUnit + totalEquipUnit;
-      r.totalMdoUnit = totalMdoUnit;
-      r.totalMatUnit = totalMatUnit;
-      r.totalEquipUnit = totalEquipUnit;
-      r.totalSemBdiUnit = totalSemBdiUnit;
-      r.totalMdoSemBdi = totalMdoUnit*qty;
-      r.totalMatSemBdi = totalMatUnit*qty;
-      r.totalEquipSemBdi = totalEquipUnit*qty;
-      r.totalSemBdi = totalSemBdiUnit*qty;
-      r.valorUnit = totalSemBdiUnit*(1+(bdiPercent||0)/100);
-      r.valorTotal = r.valorUnit*qty;
-      grandTotal += r.valorTotal;
-    }
-  });
-
-  // rollup dos itens (soma dos subitens até o próximo item)
-  let curItem = null;
-  orcamento.forEach(r=>{
-    if(r.level==='item'){
-      curItem = r;
-      curItem.totalMdoSemBdi=0; curItem.totalMatSemBdi=0; curItem.totalEquipSemBdi=0;
-      curItem.totalSemBdi=0; curItem.valorTotal=0;
-    } else if(curItem){
-      curItem.totalMdoSemBdi += r.totalMdoSemBdi;
-      curItem.totalMatSemBdi += r.totalMatSemBdi;
-      curItem.totalEquipSemBdi += r.totalEquipSemBdi;
-      curItem.totalSemBdi += r.totalSemBdi;
-      curItem.valorTotal += r.valorTotal;
-    }
-  });
-
-  orcamento.forEach(r=>{
-    r.incidencia = grandTotal>0 ? (r.valorTotal/grandTotal*100) : 0;
-  });
-
-  window._orcGrandTotal = grandTotal;
-  renderOrcamento();
-  renderOrcStats();
-  renderDashboard();
-  saveProject();
-}
-
-function renderOrcStats(){
-  const strip = document.getElementById('orcStatsStrip');
-  if(!strip) return;
-  const total = window._orcGrandTotal || 0;
-  const nSub = orcamento.filter(r=>r.level==='subitem').length;
-  const semPreco = orcamento.filter(r=>r.level==='subitem' && r.sinapiCode && r.semPreco).length;
-  strip.innerHTML = `
-    <div class="stat accent"><div class="lbl">Valor total do orçamento</div><div class="val" style="font-size:18px;">R$ ${fmtNum(total,2)}</div></div>
-    <div class="stat"><div class="lbl">Subitens</div><div class="val">${nSub}</div></div>
-    <div class="stat"><div class="lbl">BDI aplicado</div><div class="val">${fmtNum(bdiPercent,2)}<span class="unit">%</span></div></div>
-    ${semPreco>0?`<div class="stat"><div class="lbl">Atenção</div><div class="val" style="font-size:13px;color:var(--accent);">${semPreco} subitem(ns) com preço incompleto</div></div>`:''}
-  `;
-}
-
-function renderOrcamento(){
-  const tbody = document.getElementById('tbodyOrcamento');
-  document.getElementById('cOrc').textContent = orcamento.length;
-  document.getElementById('emptyOrcamento').style.display = orcamento.length ? 'none':'block';
-
-  tbody.innerHTML = orcamento.map(r=>{
-    if(r.level==='item'){
-      return `<tr class="tr-orc-item" data-orc="${r.id}">
-        <td>${r.numero}</td>
-        <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
-        <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
-        <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
-        <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
-      </tr>`;
-    }
-    const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
-    return `<tr class="tr-orc-subitem" data-orc="${r.id}">
-      <td>${r.numero}</td>
-      <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
-      <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
-      <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
-      <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código…" autocomplete="off"></div> ${semPrecoBadge}</td>
-      <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaMat" data-orc="${r.id}" value="${fmtInput(r.taxaMat)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="equip" data-orc="${r.id}" value="${fmtInput(r.equip)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaEquipPct" data-orc="${r.id}" value="${fmtInput(r.taxaEquipPct)}" step="0.1"></td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalSemBdiUnit,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMdoSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMatSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalEquipSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.totalSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
-      <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
-    </tr>`;
-  }).join('');
-
-  bindOrcamentoEvents();
-}
-function fmtInput(n){ return (n===null||n===undefined||isNaN(n)) ? '' : (Math.round(n*100)/100); }
-function escapeAttr(s){ return String(s??'').replace(/"/g,'&quot;'); }
-
-function bindOrcamentoEvents(){
-  document.querySelectorAll('#tblOrcamento input[data-orcf]').forEach(inp=>{
-    if(inp.dataset.orcf==='sinapiCode'){
-      setupCodeSearch(inp, ()=>{
-        const row = orcamento.find(r=>r.id==inp.dataset.orc);
-        row.sinapiCode = inp.value.trim();
-        applySinapiPricing(row);
-        recalcOrcamento();
-      });
-    }
-    inp.addEventListener('change', ()=>{
-      const row = orcamento.find(r=>r.id==inp.dataset.orc);
-      const f = inp.dataset.orcf;
-      if(f==='nome') row.nome = inp.value;
-      else if(f==='unidade') row.unidade = inp.value;
-      else if(f==='quant') row.quant = parseFloat(inp.value)||0;
-      else if(f==='sinapiCode'){
-        row.sinapiCode = inp.value.trim();
-        applySinapiPricing(row);
-      }
-      else row[f] = parseFloat(inp.value)||0;
-      recalcOrcamento();
-    });
-  });
-  document.querySelectorAll('[data-orcremove]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      orcamento = orcamento.filter(r=>r.id!=btn.dataset.orcremove);
-      recalcOrcamento();
-    });
-  });
-}
-
 function setupBdiTab(){
   const inp = document.getElementById('bdiPercent');
   inp.value = bdiPercent;
   inp.addEventListener('change', ()=>{
     bdiPercent = parseFloat(inp.value)||0;
-    recalcOrcamento();
+    recalcAll();
   });
 }
 
-/* ---------------- Dashboard: Curva ABC ---------------- */
+/* ============================================================
+   12. DASHBOARD — Curva ABC
+   ============================================================ */
 function renderDashboard(){
   const canvas = document.getElementById('chartAbc');
   if(!canvas) return;
@@ -920,7 +939,7 @@ function renderDashboard(){
   const labels = rows.map(r=>`${r.numero} ${truncate(r.nome,22)}`);
   const values = rows.map(r=>r.valorTotal);
   const cumPct = rows.map(r=>{ acc += r.valorTotal; return total>0 ? acc/total*100 : 0; });
-  const barColors = cumPct.map(p=> p<=80 ? '#e8a33d' : p<=95 ? '#5b9dd9' : '#5b6673');
+  const barColors = cumPct.map(p=> p<=80 ? '#e8a33d' : p<=95 ? '#5b9dd9' : '#8a94a1');
 
   if(abcChart) abcChart.destroy();
   const ctx = canvas.getContext('2d');
@@ -928,39 +947,21 @@ function renderDashboard(){
     data: {
       labels,
       datasets: [
-        {
-          type: 'bar',
-          label: 'Valor (R$)',
-          data: values,
-          backgroundColor: barColors,
-          yAxisID: 'y',
-          order: 2,
-        },
-        {
-          type: 'line',
-          label: 'Acumulado (%)',
-          data: cumPct,
-          borderColor: '#e7ebef',
-          backgroundColor: '#e7ebef',
-          borderWidth: 1.5,
-          pointRadius: 2,
-          yAxisID: 'y1',
-          order: 1,
-          tension: 0.15,
-        }
+        { type: 'bar', label: 'Valor (R$)', data: values, backgroundColor: barColors, yAxisID: 'y', order: 2 },
+        { type: 'line', label: 'Acumulado (%)', data: cumPct, borderColor: '#e7ebef', backgroundColor: '#e7ebef',
+          borderWidth: 1.5, pointRadius: 2, yAxisID: 'y1', order: 1, tension: 0.15 }
       ]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: {mode:'index', intersect:false},
       scales: {
-        x: { ticks:{ color:'#8b98a7', font:{size:10}, maxRotation:60, minRotation:40 }, grid:{ color:'#232a33' } },
-        y: { position:'left', ticks:{ color:'#8b98a7', callback:v=>'R$ '+fmtNum(v,0) }, grid:{ color:'#232a33' }, title:{display:true,text:'Valor (R$)',color:'#8b98a7'} },
-        y1:{ position:'right', min:0, max:100, ticks:{ color:'#8b98a7', callback:v=>v+'%' }, grid:{ drawOnChartArea:false }, title:{display:true,text:'Acumulado (%)',color:'#8b98a7'} },
+        x: { ticks:{ color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:40 }, grid:{ color:'#232a33' } },
+        y: { position:'left', ticks:{ color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0) }, grid:{ color:'#232a33' }, title:{display:true,text:'Valor (R$)',color:'#b7c0cb'} },
+        y1:{ position:'right', min:0, max:100, ticks:{ color:'#b7c0cb', callback:v=>v+'%' }, grid:{ drawOnChartArea:false }, title:{display:true,text:'Acumulado (%)',color:'#b7c0cb'} },
       },
       plugins: {
-        legend: { labels:{ color:'#c7cdd4' } },
+        legend: { labels:{ color:'#e7ebef' } },
         tooltip: {
           callbacks: {
             label: (ctx)=> ctx.dataset.type==='line'
@@ -992,13 +993,13 @@ function renderDashStats(rows){
 }
 
 function setupDashboardTab(){
-  document.getElementById('btnAbcItens').addEventListener('click', (e)=>{
+  document.getElementById('btnAbcItens').addEventListener('click', ()=>{
     abcLevel='item';
     document.getElementById('btnAbcItens').classList.add('active');
     document.getElementById('btnAbcSubitens').classList.remove('active');
     renderDashboard();
   });
-  document.getElementById('btnAbcSubitens').addEventListener('click', (e)=>{
+  document.getElementById('btnAbcSubitens').addEventListener('click', ()=>{
     abcLevel='subitem';
     document.getElementById('btnAbcSubitens').classList.add('active');
     document.getElementById('btnAbcItens').classList.remove('active');
@@ -1007,7 +1008,7 @@ function setupDashboardTab(){
 }
 
 /* ============================================================
-   10. CALENDÁRIO — render/eventos
+   13. CRONOGRAMA — calendário embutido (dias úteis e feriados)
    ============================================================ */
 const WEEKDAY_NAMES = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
 
@@ -1027,9 +1028,7 @@ function renderCalendarTab(){
       recalcAll();
     });
   });
-
   document.getElementById('projStart').value = calendar.start;
-
   renderHolidaysTable();
 }
 
@@ -1065,24 +1064,75 @@ function renderHolidaysTable(){
   });
 }
 
-/* ============================================================
-   10. RENDER GERAL
-   ============================================================ */
-function renderAll(){
-  renderAtividades();
-  renderRecursos();
-  renderStats();
-  renderGantt();
+function setupCalendarTab(){
+  document.getElementById('projStart').addEventListener('change', e=>{ calendar.start = e.target.value; recalcAll(); });
+  document.getElementById('btnGenHolidays').addEventListener('click', ()=>{
+    const year = parseInt(document.getElementById('genYear').value,10);
+    if(!year) return;
+    const existing = new Set(calendar.holidays.map(h=>h.date));
+    const gen = generateHolidays(year).filter(h=>!existing.has(h.date));
+    calendar.holidays = calendar.holidays.concat(gen);
+    renderHolidaysTable();
+    recalcAll();
+    showToast(`${gen.length} feriados de ${year} adicionados.`);
+  });
+  document.getElementById('btnAddHoliday').addEventListener('click', ()=>{
+    calendar.holidays.push({date: toISO(new Date()), name:'Novo feriado', sphere:'municipal', enabled:true});
+    renderHolidaysTable();
+    recalcAll();
+  });
+  document.getElementById('calToggle').addEventListener('click', ()=>{
+    document.getElementById('calToggle').classList.toggle('open');
+    document.getElementById('calBody').classList.toggle('open');
+  });
 }
 
 /* ============================================================
-   11. EXPORTAÇÃO EXCEL
+   14. CONFIGURAÇÃO — dados da obra
+   ============================================================ */
+function collectConfig(){
+  return {
+    nome: document.getElementById('cfgNome').value,
+    createdAt: window._createdAt || new Date().toISOString(),
+    cliente: document.getElementById('cfgCliente').value,
+    telefone: document.getElementById('cfgTelefone').value,
+    email: document.getElementById('cfgEmail').value,
+    endereco: document.getElementById('cfgEndereco').value,
+    tipo: document.getElementById('cfgTipo').value,
+    subtipo: document.getElementById('cfgSubtipo').value,
+  };
+}
+function applyConfig(cfg){
+  cfg = cfg || {};
+  document.getElementById('cfgNome').value = cfg.nome || 'Nova obra';
+  window._createdAt = cfg.createdAt || new Date().toISOString();
+  document.getElementById('cfgCriadoEm').value = fmtDate(new Date(window._createdAt));
+  document.getElementById('cfgCliente').value = cfg.cliente || '';
+  document.getElementById('cfgTelefone').value = cfg.telefone || '';
+  document.getElementById('cfgEmail').value = cfg.email || '';
+  document.getElementById('cfgEndereco').value = cfg.endereco || '';
+  document.getElementById('cfgTipo').value = cfg.tipo || 'Residencial';
+  document.getElementById('cfgSubtipo').value = cfg.subtipo || 'Construção';
+}
+function setupConfigTab(){
+  ['cfgNome','cfgCliente','cfgTelefone','cfgEmail','cfgEndereco','cfgTipo','cfgSubtipo'].forEach(id=>{
+    document.getElementById(id).addEventListener('change', ()=>{
+      if(id==='cfgNome') refreshProjectSelect();
+      saveProject();
+    });
+  });
+  document.getElementById('btnDeleteProject').addEventListener('click', deleteCurrentProject);
+}
+
+/* ============================================================
+   15. EXPORTAÇÃO EXCEL
    ============================================================ */
 function exportExcel(){
   const wb = XLSX.utils.book_new();
+  const subitens = orcamento.filter(r=>r.level==='subitem');
 
-  const cronoRows = [['#','Código','Descrição','Unidade','Quantidade','Predecessoras','Duração (dias)','Início','Fim']];
-  activities.forEach(a=>cronoRows.push([a.seq, a.code, a.desc||'', a.unit||'', a.qty||0, a.predText||'', a.durationDays||'', a.start?fmtDate(a.start):'', a.end?fmtDate(a.end):'']));
+  const cronoRows = [['#','Descrição','Código SINAPI','Unidade','Quantidade','Predecessoras','Duração (dias)','Início','Fim']];
+  subitens.forEach(a=>cronoRows.push([a.seq, a.nome, a.sinapiCode||'', a.unidade||'', a.quant||0, a.predText||'', a.durationDays||'', a.start?fmtDate(a.start):'', a.end?fmtDate(a.end):'']));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cronoRows), 'Cronograma');
 
   const {roleTotals, matTotals, equipTotals} = window._totals || {roleTotals:{},matTotals:{},equipTotals:{}};
@@ -1129,12 +1179,20 @@ function exportExcel(){
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(orcRows), 'Orcamento');
   }
 
-  const name = (document.getElementById('projName').value||'projeto').replace(/[^\w\- ]/g,'').trim() || 'projeto';
-  XLSX.writeFile(wb, `Planejamento_${name}.xlsx`);
+  const cfg = collectConfig();
+  const cfgRows = [
+    ['Nome da obra', cfg.nome],['Data de criação', fmtDate(new Date(cfg.createdAt))],
+    ['Cliente', cfg.cliente],['Telefone', cfg.telefone],['E-mail', cfg.email],
+    ['Endereço', cfg.endereco],['Tipo', cfg.tipo],['Subtipo', cfg.subtipo],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cfgRows), 'Dados da obra');
+
+  const name = (cfg.nome||'projeto').replace(/[^\w\- ]/g,'').trim() || 'projeto';
+  XLSX.writeFile(wb, `Controle_${name}.xlsx`);
 }
 
 /* ============================================================
-   12. PERSISTÊNCIA (window.storage)
+   16. PERSISTÊNCIA (Supabase)
    ============================================================ */
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_psFslciJm9QIZTBkCiF77Q_SxA0hTaA';
@@ -1143,8 +1201,8 @@ const SUPA_HEADERS = {
   'Authorization': 'Bearer ' + SUPABASE_KEY,
   'Content-Type': 'application/json'
 };
-const LOCAL_PTR_KEY = 'planejador_obras_sinapi:current_project_id';
-const LOCAL_CACHE_KEY = 'planejador_obras_sinapi:cache'; // salva-vaidas offline
+const LOCAL_PTR_KEY = 'controle_sinapi:current_project_id';
+const LOCAL_CACHE_KEY = 'controle_sinapi:cache';
 
 let currentProjectId = null;
 let saveDebounce = null;
@@ -1164,7 +1222,6 @@ async function supaRequest(path, options){
   }
   return res.status===204 ? null : res.json();
 }
-
 async function supaListProjects(){
   return supaRequest('projetos?select=id,nome,atualizado_em&order=atualizado_em.desc', {method:'GET'});
 }
@@ -1185,9 +1242,8 @@ async function supaDeleteProject(id){
 
 function collectProjectPayload(){
   return {
-    name: document.getElementById('projName').value,
+    config: collectConfig(),
     calendar,
-    activities: activities.map(a=>({id:a.id, code:a.code, qty:a.qty, predText:a.predText, roleAssign:a.roleAssign, expanded:a.expanded})),
     orcamento: orcamento.map(r=>({...r})),
     bdiPercent
   };
@@ -1209,8 +1265,8 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId,
-      nome: payload.name,
-      dados: {calendar: payload.calendar, activities: payload.activities, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent},
+      nome: payload.config.nome,
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -1222,9 +1278,8 @@ async function doSaveProject(){
 }
 
 function applyProjectPayload(payload){
-  if(payload.name) document.getElementById('projName').value = payload.name;
+  applyConfig(payload.config);
   if(payload.calendar) calendar = payload.calendar;
-  if(payload.activities) activities = payload.activities;
   orcamento = payload.orcamento || [];
   bdiPercent = payload.bdiPercent || 0;
   nextOrcId = orcamento.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
@@ -1236,7 +1291,7 @@ async function refreshProjectSelect(){
     const rows = await supaListProjects();
     sel.innerHTML = rows.map(r=>`<option value="${r.id}" ${r.id===currentProjectId?'selected':''}>${escapeXml(r.nome||'(sem nome)')}</option>`).join('');
   }catch(e){
-    sel.innerHTML = currentProjectId ? `<option value="${currentProjectId}" selected>${escapeXml(document.getElementById('projName').value)}</option>` : '';
+    sel.innerHTML = currentProjectId ? `<option value="${currentProjectId}" selected>${escapeXml(document.getElementById('cfgNome').value)}</option>` : '';
   }
 }
 
@@ -1249,19 +1304,18 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
       }
     }
-    // sem ponteiro local (ex: computador novo) — pega o projeto mais recente do banco
     const rows = await supaListProjects();
     if(rows && rows.length){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -1287,21 +1341,19 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({name: row.nome, calendar: row.dados?.calendar, activities: row.dados?.activities, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
-  recalcOrcamento();
 }
 
 async function createNewProject(){
-  const nome = prompt('Nome do novo projeto:', 'Nova obra');
+  const nome = prompt('Nome da nova obra:', 'Nova obra');
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  document.getElementById('projName').value = nome;
-  activities = []; nextActId = 1; calendar = defaultCalendar();
-  orcamento = []; nextOrcId = 1; bdiPercent = 0;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar();
+  applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
 
   const usarEap = await showModal(
@@ -1325,9 +1377,34 @@ async function createNewProject(){
 
   renderCalendarTab();
   recalcAll();
-  recalcOrcamento();
   await doSaveProject();
 }
+
+async function deleteCurrentProject(){
+  const confirmed = await showDeleteConfirmModal();
+  if(!confirmed) return;
+  if(!currentProjectId){ showToast('Nenhum projeto para excluir.'); return; }
+  try{
+    await supaDeleteProject(currentProjectId);
+    try{ localStorage.removeItem(LOCAL_PTR_KEY); }catch(e){}
+    currentProjectId = null;
+    showToast('Obra excluída.');
+    const had = await loadProject();
+    if(!had){
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar();
+      applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
+      await doSaveProject();
+    }
+    renderCalendarTab();
+    document.getElementById('bdiPercent').value = bdiPercent;
+    recalcAll();
+    await refreshProjectSelect();
+  }catch(e){
+    console.error(e);
+    showToast('Não consegui excluir — confira a conexão com o banco.');
+  }
+}
+
 function setOrcLoadStatus(text, isError){
   const el = document.getElementById('orcLoadStatus');
   if(!el) return;
@@ -1336,13 +1413,8 @@ function setOrcLoadStatus(text, isError){
 }
 
 /* ============================================================
-   13. INICIALIZAÇÃO / EVENTOS GLOBAIS
+   17. TABS / TOPBAR / INIT
    ============================================================ */
-function addActivity(){
-  activities.push({id: nextActId++, code:'', qty:1, predText:'', roleAssign:{}, expanded:true});
-  recalcAll();
-}
-
 function setupTabs(){
   document.querySelectorAll('.tab').forEach(tab=>{
     tab.addEventListener('click', ()=>{
@@ -1357,17 +1429,11 @@ function setupTabs(){
 }
 
 function setupTopbar(){
-  document.getElementById('btnAddRow').addEventListener('click', addActivity);
   document.getElementById('btnExport').addEventListener('click', exportExcel);
-  document.getElementById('projName').addEventListener('change', saveProject);
-  document.getElementById('btnReset').addEventListener('click', ()=>{
-    if(!confirm('Isso vai limpar todas as atividades deste projeto (o cadastro continua salvo no banco, só as atividades somem). Continuar?')) return;
-    activities = []; nextActId = 1;
-    recalcAll();
-  });
   document.getElementById('btnNewProject').addEventListener('click', createNewProject);
   document.getElementById('projectSelect').addEventListener('change', (e)=> switchProject(e.target.value));
   document.getElementById('btnAddOrcItem').addEventListener('click', addOrcRow);
+
   document.getElementById('btnUpdateSinapi').addEventListener('click', ()=> document.getElementById('sinapiUpload').click());
   document.getElementById('sinapiUpload').addEventListener('change', async (e)=>{
     const file = e.target.files[0];
@@ -1383,30 +1449,10 @@ function setupTopbar(){
       document.getElementById('loadStatus').textContent = '';
       showToast(`Base atualizada: ${DB.tops.length} composições. Atenção: esse upload rápido não traz preços (R$) para a aba Orçamento — só quantidades/horas. Para atualizar com preços, rode convert_sinapi.py com a planilha SINAPI completa e republique o sinapi_data.json.`);
       recalcAll();
-      recalcOrcamento();
     }catch(err){
       console.error(err);
       showToast('Não foi possível ler essa planilha. Confira se é o formato "Analítico" do SINAPI.');
     }
-  });
-}
-
-function setupCalendarTab(){
-  document.getElementById('projStart').addEventListener('change', e=>{ calendar.start = e.target.value; recalcAll(); });
-  document.getElementById('btnGenHolidays').addEventListener('click', ()=>{
-    const year = parseInt(document.getElementById('genYear').value,10);
-    if(!year) return;
-    const existing = new Set(calendar.holidays.map(h=>h.date));
-    const gen = generateHolidays(year).filter(h=>!existing.has(h.date));
-    calendar.holidays = calendar.holidays.concat(gen);
-    renderHolidaysTable();
-    recalcAll();
-    showToast(`${gen.length} feriados de ${year} adicionados.`);
-  });
-  document.getElementById('btnAddHoliday').addEventListener('click', ()=>{
-    calendar.holidays.push({date: toISO(new Date()), name:'Novo feriado', sphere:'municipal', enabled:true});
-    renderHolidaysTable();
-    recalcAll();
   });
 }
 
@@ -1417,11 +1463,12 @@ function setupCalendarTab(){
   setupCalendarTab();
   setupBdiTab();
   setupDashboardTab();
+  setupConfigTab();
   await loadSinapi();
   const had = await loadProject();
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
+  if(!had) applyConfig({nome:'Jardins di Roma · Módulo 4', createdAt: new Date().toISOString()});
   recalcAll();
-  recalcOrcamento();
-  if(!had) await doSaveProject(); // primeiro uso: cria o projeto padrão no banco
+  if(!had) await doSaveProject();
 })();

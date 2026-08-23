@@ -18,6 +18,23 @@ let fluxoPeriod = 'quinzena';
 let ganttLevel = 'subitem';
 let pendingFocusId = null;
 let dragBlockIds = null;
+let fluxoView = 'chart';
+
+/* ---- compras / fluxo de caixa ---- */
+let compras = [];
+let nextCompraId = 1;
+let recebimentos = [];
+let nextRecebId = 1;
+let bancos = [];
+let fcxPeriod = 'quinzena';
+let recPeriod = {mdo:'quinzena', mat:'quinzena', equip:'quinzena'};
+let recCharts = {mdo:null, mat:null, equip:null};
+let prevRealChart = null;
+let fluxoCaixaChart = null;
+let saldoObraChart = null;
+
+const TIPOS_COMPRA = ['Mão de obra','Material','Equipamento','Extra'];
+const FORMAS_PAGTO = ['PIX','Cartão de crédito','Cartão de débito','Espécie'];
 
 /* ---------------- utilidades ---------------- */
 function normalize(s){
@@ -536,6 +553,8 @@ function renderAll(){
   renderStats();
   renderGantt();
   renderDashboardAll();
+  try{ renderCompras(); }catch(e){ console.error('Compras:', e); }
+  try{ renderFluxoCaixaAll(); }catch(e){ console.error('Fluxo de caixa:', e); }
 }
 
 /* ============================================================
@@ -848,8 +867,17 @@ function bindActivityEvents(){
   document.querySelectorAll('input[data-role-act]').forEach(inp=>{
     inp.addEventListener('change', ()=>{
       const act = orcamento.find(r=>r.id==inp.dataset.roleAct);
+      const code = inp.dataset.roleCode;
+      const oldVal = act.roleAssign[code] || 1;
       const val = Math.max(1, parseFloat(inp.value)||1);
-      act.roleAssign[inp.dataset.roleCode] = val;
+      const factor = val / oldVal;
+      if(factor>0 && factor!==1 && isFinite(factor)){
+        Object.keys(act.roleAssign).forEach(c=>{
+          if(c===code) return;
+          act.roleAssign[c] = Math.max(1, Math.round((act.roleAssign[c]||1)*factor));
+        });
+      }
+      act.roleAssign[code] = val;
       recalcAll();
     });
   });
@@ -881,10 +909,74 @@ function renderRecursos(){
   fillSimpleTable('#tblEquipamentos tbody', Object.entries(equipTotals).sort((a,b)=>b[1].qty-a[1].qty), ([code,r])=>`
     <tr><td class="code">${code}</td><td>${r.desc}</td><td>${r.unit}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)}</td></tr>`);
   window._totals = {roleTotals, matTotals, equipTotals};
+
+  renderResourceChart('roles','mdo','chartRecMdo',recPeriod.mdo,'Homens-dia','#e8a33d',8);
+  renderResourceChart('materials','mat','chartRecMat',recPeriod.mat,'Quantidade','#5b9dd9',1);
+  renderResourceChart('equip','equip','chartRecEquip',recPeriod.equip,'Quantidade','#a58bd9',1);
 }
 function fillSimpleTable(sel, arr, rowFn){
   const tb = document.querySelector(sel);
   tb.innerHTML = arr.length ? arr.map(rowFn).join('') : `<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+}
+
+function computeResourceSeries(kind, periodType){
+  const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.end && r.breakdown);
+  if(subitens.length===0) return null;
+  const projStart = new Date(Math.min(...subitens.map(a=>a.start)));
+  const buckets = {};
+  subitens.forEach(act=>{
+    const bucketMap = act.breakdown[kind];
+    if(!bucketMap) return;
+    let total = 0;
+    for(const c in bucketMap) total += bucketMap[c].qty || 0;
+    if(total<=0) return;
+    const workdays = [];
+    let d = new Date(act.start);
+    while(d<=act.end){ if(isWorkday(d)) workdays.push(new Date(d)); d = addDays(d,1); }
+    if(workdays.length===0) workdays.push(new Date(act.start));
+    const n = workdays.length;
+    workdays.forEach(wd=>{
+      const key = periodKeyFor(wd, periodType, projStart);
+      if(!buckets[key]) buckets[key] = {qty:0, sortDate:wd};
+      buckets[key].qty += total/n;
+      if(wd<buckets[key].sortDate) buckets[key].sortDate = wd;
+    });
+  });
+  const keys = Object.keys(buckets).sort((a,b)=> buckets[a].sortDate - buckets[b].sortDate);
+  if(keys.length===0) return null;
+  return {
+    labels: keys.map(k=>periodLabelFor(k, periodType, projStart)),
+    values: keys.map(k=>buckets[k].qty),
+  };
+}
+function renderResourceChart(kind, chartKey, canvasId, periodType, label, color, divisor){
+  const canvas = document.getElementById(canvasId);
+  if(recCharts[chartKey]){ recCharts[chartKey].destroy(); recCharts[chartKey]=null; }
+  if(!canvas || typeof Chart==='undefined') return;
+  const data = computeResourceSeries(kind, periodType);
+  if(!data) return;
+  recCharts[chartKey] = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{ labels:data.labels, datasets:[{label, data:data.values.map(v=>v/(divisor||1)), backgroundColor:color}] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:30}, grid:{color:'#232a33'} },
+        y:{ ticks:{color:'#b7c0cb'}, grid:{color:'#232a33'} },
+      },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>label+': '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function setupRecursosTab(){
+  document.querySelectorAll('[data-recgroup]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const group = btn.dataset.recgroup, period = btn.dataset.period;
+      recPeriod[group] = period;
+      document.querySelectorAll(`[data-recgroup="${group}"]`).forEach(b=>b.classList.toggle('active', b.dataset.period===period));
+      renderRecursos();
+    });
+  });
 }
 
 /* ============================================================
@@ -1152,6 +1244,27 @@ function renderFluxoCharts(){
   const emptyEl = document.getElementById('emptyFluxo');
   if(emptyEl) emptyEl.style.display = data ? 'none' : 'block';
   ['mdo','mat','outros'].forEach(cat=>{ if(fluxoCharts[cat]){ fluxoCharts[cat].destroy(); fluxoCharts[cat]=null; } });
+
+  const chartsWrap = document.getElementById('fluxoChartsWrap');
+  const tableWrap = document.getElementById('fluxoTableWrap');
+  if(fluxoView==='table'){
+    if(chartsWrap) chartsWrap.style.display='none';
+    if(tableWrap) tableWrap.style.display='block';
+    const tb = document.querySelector('#tblFluxo tbody');
+    if(tb){
+      if(!data){
+        tb.innerHTML = `<tr><td colspan="5" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+      } else {
+        tb.innerHTML = data.labels.map((lbl,i)=>{
+          const mdo=data.mdo[i]||0, mat=data.mat[i]||0, outros=data.outros[i]||0;
+          return `<tr><td>${lbl}</td><td class="num" style="font-family:var(--mono)">${fmtNum(mdo,2)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(mat,2)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(outros,2)}</td><td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(mdo+mat+outros,2)}</td></tr>`;
+        }).join('');
+      }
+    }
+    return;
+  }
+  if(chartsWrap) chartsWrap.style.display='block';
+  if(tableWrap) tableWrap.style.display='none';
   if(!data || typeof Chart==='undefined') return;
   const colors = {mdo:'#e8a33d', mat:'#5b9dd9', outros:'#a58bd9'};
   const canvasIds = {mdo:'chartFluxoMdo', mat:'chartFluxoMat', outros:'chartFluxoOutros'};
@@ -1179,6 +1292,12 @@ function setFluxoPeriod(p){
   document.getElementById('btnPerMes').classList.toggle('active', p==='mes');
   renderFluxoCharts();
 }
+function setFluxoView(v){
+  fluxoView = v;
+  document.getElementById('btnFluxoViewChart').classList.toggle('active', v==='chart');
+  document.getElementById('btnFluxoViewTable').classList.toggle('active', v==='table');
+  renderFluxoCharts();
+}
 function setupDashboardTab(){
   document.getElementById('btnAbcItens').addEventListener('click', ()=>{
     abcLevel='item';
@@ -1195,6 +1314,8 @@ function setupDashboardTab(){
   document.getElementById('btnPerSemana').addEventListener('click', ()=>setFluxoPeriod('semana'));
   document.getElementById('btnPerQuinzena').addEventListener('click', ()=>setFluxoPeriod('quinzena'));
   document.getElementById('btnPerMes').addEventListener('click', ()=>setFluxoPeriod('mes'));
+  document.getElementById('btnFluxoViewChart').addEventListener('click', ()=>setFluxoView('chart'));
+  document.getElementById('btnFluxoViewTable').addEventListener('click', ()=>setFluxoView('table'));
 }
 
 /* ============================================================
@@ -1373,6 +1494,310 @@ function exportExcel(){
 }
 
 /* ============================================================
+   15b. COMPRAS
+   ============================================================ */
+function orcOptionsHtml(selectedId){
+  return orcamento.map(r=>{
+    const label = `${r.numero} ${truncate(r.nome||'',44)}`;
+    return `<option value="${r.id}" ${String(r.id)===String(selectedId)?'selected':''}>${escapeXml(label)}</option>`;
+  }).join('');
+}
+function compraRowHtml(c){
+  const showParc = c.formaPagto==='Cartão de crédito';
+  return `<tr data-compra="${c.id}">
+    <td><select class="cell" data-cf="orcId" data-compra="${c.id}"><option value="">—</option>${orcOptionsHtml(c.orcId)}</select></td>
+    <td><select class="cell" data-cf="tipo" data-compra="${c.id}">${TIPOS_COMPRA.map(t=>`<option ${t===c.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td><input type="date" class="cell" data-cf="data" data-compra="${c.id}" value="${c.data||''}"></td>
+    <td><input type="text" class="cell" data-cf="loja" data-compra="${c.id}" value="${escapeAttr(c.loja)}"></td>
+    <td><input type="text" class="cell" data-cf="notaNum" data-compra="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
+    <td><select class="cell" data-cf="formaPagto" data-compra="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
+    <td>${showParc?`<input type="number" min="1" step="1" class="cell small" style="width:44px;" data-cf="parcelas" data-compra="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
+    <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${bancos.map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
+    <td><input type="text" class="cell" data-cf="descricao" data-compra="${c.id}" value="${escapeAttr(c.descricao)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small" data-cf="quantidade" data-compra="${c.id}" value="${fmtInput(c.quantidade)}"></td>
+    <td><input type="text" class="cell" style="width:50px;" data-cf="unidade" data-compra="${c.id}" value="${escapeAttr(c.unidade)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small" data-cf="valorUnid" data-compra="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">R$ ${fmtNum(c.valorTotal,2)}</td>
+    <td><button class="icon-btn" data-comprremove="${c.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindComprasEvents(){
+  document.querySelectorAll('#tblCompras [data-cf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const c = compras.find(x=>String(x.id)===el.dataset.compra);
+      if(!c) return;
+      const f = el.dataset.cf;
+      if(f==='quantidade' || f==='valorUnid'){
+        c[f] = parseFloat(el.value)||0;
+        c.valorTotal = round2((c.quantidade||0)*(c.valorUnid||0));
+      } else if(f==='parcelas'){
+        c.parcelas = Math.max(1, parseInt(el.value,10)||1);
+      } else {
+        c[f] = el.value;
+      }
+      saveProject();
+      if(f==='formaPagto'){ renderCompras(); return; }
+      renderFluxoCaixaAll();
+    });
+  });
+  document.querySelectorAll('#tblCompras [data-comprremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      compras = compras.filter(c=>String(c.id)!==btn.dataset.comprremove);
+      renderCompras();
+      renderFluxoCaixaAll();
+      saveProject();
+    });
+  });
+}
+function renderBancosChips(){
+  const wrap = document.getElementById('bancosChips');
+  if(!wrap) return;
+  wrap.innerHTML = bancos.length ? bancos.map(b=>`<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(b)}<button class="icon-btn" style="padding:0;" data-bancoremove="${escapeAttr(b)}" title="Remover conta">✕</button></span>`).join('') : '<span class="hint">Nenhuma conta cadastrada ainda.</span>';
+  wrap.querySelectorAll('[data-bancoremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      bancos = bancos.filter(b=>b!==btn.dataset.bancoremove);
+      renderBancosChips();
+      renderCompras();
+      saveProject();
+    });
+  });
+}
+function renderCompras(){
+  renderBancosChips();
+  const tbody = document.getElementById('tbodyCompras');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyCompras');
+  if(emptyEl) emptyEl.style.display = compras.length ? 'none':'block';
+  tbody.innerHTML = compras.map(compraRowHtml).join('');
+  bindComprasEvents();
+  const total = compras.reduce((s,c)=>s+(c.valorTotal||0),0);
+  const strip = document.getElementById('comprasStatsStrip');
+  if(strip){
+    strip.innerHTML = `
+      <div class="stat accent"><div class="lbl">Total comprado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+      <div class="stat"><div class="lbl">Registros</div><div class="val">${compras.length}</div></div>
+    `;
+  }
+}
+function addCompra(){
+  compras.push({id:nextCompraId++, orcId:null, tipo:'Material', data:toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0});
+  renderCompras();
+  renderFluxoCaixaAll();
+  saveProject();
+}
+function addBanco(){
+  const nome = (prompt('Nome da conta/banco:')||'').trim();
+  if(!nome) return;
+  if(!bancos.includes(nome)) bancos.push(nome);
+  renderBancosChips();
+  renderCompras();
+  saveProject();
+}
+function setupComprasTab(){
+  document.getElementById('btnAddCompra').addEventListener('click', addCompra);
+  document.getElementById('btnAddBanco').addEventListener('click', addBanco);
+}
+
+/* ============================================================
+   15c. FLUXO DE CAIXA
+   ============================================================ */
+function recebimentoRowHtml(r, acumulado){
+  return `<tr data-receb="${r.id}">
+    <td><input type="date" class="cell" data-rf="data" data-receb="${r.id}" value="${r.data||''}"></td>
+    <td><select class="cell" data-rf="formaPagto" data-receb="${r.id}">${FORMAS_PAGTO.map(f=>`<option ${f===r.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
+    <td class="num"><input type="number" step="0.01" class="cell small" data-rf="valor" data-receb="${r.id}" value="${fmtInput(r.valor)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">R$ ${fmtNum(acumulado,2)}</td>
+    <td><button class="icon-btn" data-rembrremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function renderRecebimentos(){
+  const tbody = document.getElementById('tbodyRecebimentos');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyRecebimentos');
+  if(emptyEl) emptyEl.style.display = recebimentos.length ? 'none':'block';
+  const sorted = [...recebimentos].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
+  let acc=0;
+  tbody.innerHTML = sorted.map(r=>{ acc += (r.valor||0); return recebimentoRowHtml(r, acc); }).join('');
+  document.querySelectorAll('#tblRecebimentos [data-rf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const r = recebimentos.find(x=>String(x.id)===el.dataset.receb);
+      if(!r) return;
+      const f = el.dataset.rf;
+      r[f] = f==='valor' ? (parseFloat(el.value)||0) : el.value;
+      renderRecebimentos();
+      renderPrevRealizado();
+      renderFluxoCaixaTempo();
+      renderSaldoObra();
+      saveProject();
+    });
+  });
+  document.querySelectorAll('#tblRecebimentos [data-rembrremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      recebimentos = recebimentos.filter(r=>String(r.id)!==btn.dataset.rembrremove);
+      renderFluxoCaixaAll();
+      saveProject();
+    });
+  });
+}
+function addRecebimento(){
+  recebimentos.push({id:nextRecebId++, data:toISO(new Date()), formaPagto:'PIX', valor:0});
+  renderRecebimentos();
+  saveProject();
+}
+function computePrevRealizado(){
+  const bdiMul = 1+(bdiPercent||0)/100;
+  const subitens = orcamento.filter(r=>r.level==='subitem');
+  const realizadoByOrc = {};
+  compras.forEach(c=>{
+    if(!c.orcId) return;
+    if(!realizadoByOrc[c.orcId]) realizadoByOrc[c.orcId] = {'Mão de obra':0,'Material':0,'Equipamento':0,'Extra':0};
+    realizadoByOrc[c.orcId][c.tipo] = (realizadoByOrc[c.orcId][c.tipo]||0) + (c.valorTotal||0);
+  });
+  const rows = [];
+  subitens.forEach(r=>{
+    const prevMap = {
+      'Mão de obra': (r.totalMdoSemBdi||0)*bdiMul,
+      'Material': (r.totalMatSemBdi||0)*bdiMul,
+      'Equipamento': (r.totalEquipSemBdi||0)*bdiMul,
+    };
+    const real = realizadoByOrc[r.id] || {};
+    ['Mão de obra','Material','Equipamento'].forEach(tipo=>{
+      const prev = prevMap[tipo]||0, rea = real[tipo]||0;
+      if(prev>0.0001 || rea>0.0001) rows.push({nome:`${r.numero} ${r.nome}`, tipo, prev, real:rea});
+    });
+    if((real['Extra']||0)>0.0001) rows.push({nome:`${r.numero} ${r.nome}`, tipo:'Extra', prev:0, real:real['Extra']});
+  });
+  return rows;
+}
+function renderPrevRealizado(){
+  const rows = computePrevRealizado();
+  const tbody = document.getElementById('tbodyPrevRealizado');
+  if(tbody){
+    tbody.innerHTML = rows.length ? rows.map(r=>{
+      const pct = r.prev>0 ? (r.real/r.prev*100) : (r.real>0?999:0);
+      const cls = pct>110?'crit':(pct>=90?'ok':'warn');
+      return `<tr><td>${escapeXml(r.nome)}</td><td>${r.tipo}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.prev,2)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.real,2)}</td><td class="num"><span class="badge ${cls}">${r.prev>0?fmtNum(pct,0)+'%':'-'}</span></td></tr>`;
+    }).join('') : `<tr><td colspan="5" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+  }
+  const canvas = document.getElementById('chartPrevRealizado');
+  if(prevRealChart){ prevRealChart.destroy(); prevRealChart=null; }
+  if(!canvas || typeof Chart==='undefined' || rows.length===0) return;
+  const top = rows.slice().sort((a,b)=>(b.prev+b.real)-(a.prev+a.real)).slice(0,15);
+  prevRealChart = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{
+      labels: top.map(r=>truncate(r.nome,18)+' · '+r.tipo),
+      datasets:[
+        {label:'Previsto', data:top.map(r=>r.prev), backgroundColor:'#5b9dd9'},
+        {label:'Realizado', data:top.map(r=>r.real), backgroundColor:'#e8a33d'},
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{ ticks:{color:'#b7c0cb', font:{size:9}, maxRotation:70, minRotation:40}, grid:{color:'#232a33'} },
+        y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} },
+      },
+      plugins:{ legend:{labels:{color:'#e7ebef'}}, tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': R$ '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function computeFluxoCaixaSeries(periodType){
+  const allDates = [];
+  recebimentos.forEach(r=>{ if(r.data) allDates.push(parseISO(r.data)); });
+  compras.forEach(c=>{ if(c.data) allDates.push(parseISO(c.data)); });
+  if(allDates.length===0) return null;
+  const projStart = new Date(Math.min(...allDates));
+  const buckets = {};
+  function addBucket(date, field, val){
+    const key = periodKeyFor(date, periodType, projStart);
+    if(!buckets[key]) buckets[key] = {entradas:0, saidas:0, sortDate:date};
+    buckets[key][field] += val;
+    if(date<buckets[key].sortDate) buckets[key].sortDate = date;
+  }
+  recebimentos.forEach(r=>{ if(r.data) addBucket(parseISO(r.data), 'entradas', r.valor||0); });
+  compras.forEach(c=>{ if(c.data) addBucket(parseISO(c.data), 'saidas', c.valorTotal||0); });
+  const keys = Object.keys(buckets).sort((a,b)=> buckets[a].sortDate - buckets[b].sortDate);
+  return {
+    labels: keys.map(k=>periodLabelFor(k, periodType, projStart)),
+    entradas: keys.map(k=>buckets[k].entradas),
+    saidas: keys.map(k=>buckets[k].saidas),
+  };
+}
+function renderFluxoCaixaTempo(){
+  const data = computeFluxoCaixaSeries(fcxPeriod);
+  const tbody = document.getElementById('tbodyFluxoCaixa');
+  if(tbody){
+    tbody.innerHTML = data ? data.labels.map((lbl,i)=>{
+      const ent=data.entradas[i]||0, sai=data.saidas[i]||0;
+      return `<tr><td>${lbl}</td><td class="num" style="font-family:var(--mono);color:var(--green)">${fmtNum(ent,2)}</td><td class="num" style="font-family:var(--mono);color:var(--red)">${fmtNum(sai,2)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(ent-sai,2)}</td></tr>`;
+    }).join('') : `<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+  }
+  const canvas = document.getElementById('chartFluxoCaixa');
+  if(fluxoCaixaChart){ fluxoCaixaChart.destroy(); fluxoCaixaChart=null; }
+  if(!canvas || typeof Chart==='undefined' || !data) return;
+  fluxoCaixaChart = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{ labels:data.labels, datasets:[
+      {label:'Entradas', data:data.entradas, backgroundColor:'#6fbf8b'},
+      {label:'Saídas', data:data.saidas, backgroundColor:'#d9695b'},
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:30}, grid:{color:'#232a33'} },
+        y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} },
+      },
+      plugins:{ legend:{labels:{color:'#e7ebef'}}, tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': R$ '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function setFcxPeriod(p){
+  fcxPeriod = p;
+  document.getElementById('btnFcxPerSemana').classList.toggle('active', p==='semana');
+  document.getElementById('btnFcxPerQuinzena').classList.toggle('active', p==='quinzena');
+  document.getElementById('btnFcxPerMes').classList.toggle('active', p==='mes');
+  renderFluxoCaixaTempo();
+}
+function renderSaldoObra(){
+  const canvas = document.getElementById('chartSaldoObra');
+  if(saldoObraChart){ saldoObraChart.destroy(); saldoObraChart=null; }
+  if(!canvas || typeof Chart==='undefined') return;
+  const byDate = {};
+  recebimentos.forEach(r=>{ if(r.data) byDate[r.data] = (byDate[r.data]||0) + (r.valor||0); });
+  compras.forEach(c=>{ if(c.data) byDate[c.data] = (byDate[c.data]||0) - (c.valorTotal||0); });
+  const dates = Object.keys(byDate).sort();
+  if(dates.length===0) return;
+  let acc=0;
+  const labels=[], values=[];
+  dates.forEach(d=>{ acc+=byDate[d]; labels.push(fmtDate(d)); values.push(acc); });
+  saldoObraChart = new Chart(canvas.getContext('2d'), {
+    type:'line',
+    data:{ labels, datasets:[{label:'Saldo acumulado (R$)', data:values, borderColor:'#e8a33d', backgroundColor:'rgba(232,163,61,0.15)', fill:true, tension:0.2, pointRadius:2}] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:30}, grid:{color:'#232a33'} },
+        y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} },
+      },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>'Saldo: R$ '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function renderFluxoCaixaAll(){
+  renderRecebimentos();
+  renderPrevRealizado();
+  renderFluxoCaixaTempo();
+  renderSaldoObra();
+}
+function setupFluxoCaixaTab(){
+  document.getElementById('btnAddRecebimento').addEventListener('click', addRecebimento);
+  document.getElementById('btnFcxPerSemana').addEventListener('click', ()=>setFcxPeriod('semana'));
+  document.getElementById('btnFcxPerQuinzena').addEventListener('click', ()=>setFcxPeriod('quinzena'));
+  document.getElementById('btnFcxPerMes').addEventListener('click', ()=>setFcxPeriod('mes'));
+}
+
+/* ============================================================
    16. PERSISTÊNCIA (Supabase)
    ============================================================ */
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
@@ -1402,7 +1827,7 @@ async function supaUpsertProject(row){
 async function supaDeleteProject(id){ return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'}); }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -1416,7 +1841,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -1429,6 +1854,11 @@ function applyProjectPayload(payload){
   orcamento = payload.orcamento || [];
   bdiPercent = payload.bdiPercent || 0;
   nextOrcId = orcamento.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
+  compras = payload.compras || [];
+  nextCompraId = compras.reduce((m,c)=>Math.max(m,c.id||0), 0) + 1;
+  bancos = payload.bancos || [];
+  recebimentos = payload.recebimentos || [];
+  nextRecebId = recebimentos.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
 }
 async function refreshProjectSelect(){
   const sel = document.getElementById('projectSelect');
@@ -1447,7 +1877,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -1458,7 +1888,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -1478,7 +1908,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -1488,7 +1918,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar();
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1;
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
 
@@ -1517,7 +1947,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar();
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }
@@ -1546,6 +1976,8 @@ function setupTabs(){
       document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
       if(btn.dataset.tab==='cronograma') renderGantt();
       if(btn.dataset.tab==='dashboard') setTimeout(renderDashboardAll, 30);
+      if(btn.dataset.tab==='recursos') setTimeout(renderRecursos, 30);
+      if(btn.dataset.tab==='fluxocaixa') setTimeout(renderFluxoCaixaAll, 30);
       document.getElementById('sidebar').classList.remove('open');
     });
   });
@@ -1588,6 +2020,9 @@ function setupTopbar(){
   setupCalendarTab();
   setupBdiTab();
   setupDashboardTab();
+  setupRecursosTab();
+  setupComprasTab();
+  setupFluxoCaixaTab();
   setupGanttToggle();
   setupConfigTab();
   await loadSinapi();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Controle · Base SINAPI</title>
+<title>Qorban - Controle</title>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
@@ -83,7 +83,7 @@ input,select{font-family:var(--sans);}
 .navbtn .count{margin-left:auto;background:var(--line);color:var(--text-dim);border-radius:8px;padding:0 6px;font-size:10px;}
 
 .main{flex:1;overflow-y:auto;min-width:0;}
-.main-inner{max-width:1500px;margin:0 auto;padding:22px 26px 60px;}
+.main-inner{max-width:1500px;margin:0;padding:8px 6px 40px 8px;}
 
 .topbar-mobile{display:none;align-items:center;gap:10px;padding:12px 16px;background:var(--bg-panel);border-bottom:1px solid var(--line);}
 .hamburger{background:none;border:1px solid var(--line);color:var(--text);border-radius:4px;padding:6px 10px;font-size:16px;}
@@ -270,6 +270,9 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .tr-orc-subitem.indent td:nth-child(2){padding-left:18px;}
 #tblOrcamento thead th{white-space:normal;line-height:1.25;}
 #tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
+#tblOrcamento input[type=number].cell{-moz-appearance:textfield;}
+#tblOrcamento input[type=number].cell::-webkit-inner-spin-button,
+#tblOrcamento input[type=number].cell::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
 tr.drag-over td{border-top:2px solid var(--accent) !important;}
 tr[draggable="true"]{cursor:default;}
 .orc-actions{display:flex;gap:2px;align-items:center;}
@@ -323,10 +326,12 @@ tr[draggable="true"]{cursor:default;}
       <div class="panel active" id="panel-orcamento">
         <div class="stats" id="orcStatsStrip"></div>
         <div class="card">
-          <h2><span class="tag">EAP</span>Estrutura analítica do orçamento</h2>
           <div class="toolbar-row">
-            <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
-            <span class="hint" id="orcLoadStatus"></span>
+            <h2 style="margin:0;"><span class="tag">EAP</span>Estrutura analítica do orçamento</h2>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="hint" id="orcLoadStatus"></span>
+              <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
+            </div>
           </div>
           <div class="tbl-wrap" style="overflow-x:auto;">
             <table id="tblOrcamento">
@@ -484,18 +489,51 @@ tr[draggable="true"]{cursor:default;}
           <div class="tbl-wrap"><table id="tblMaoObra"><thead><tr>
             <th>Função</th><th class="num">Horas totais</th><th class="num">Homens-dia (8h)</th>
           </tr></thead><tbody></tbody></table></div>
+          <div class="toolbar-row" style="margin-top:16px;">
+            <div class="hint" style="margin:0;">Homens-dia alocados por período</div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" data-recgroup="mdo" data-period="semana">Semana</button>
+              <button class="btn small active" data-recgroup="mdo" data-period="quinzena">Quinzena</button>
+              <button class="btn small" data-recgroup="mdo" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <div style="position:relative;height:240px;">
+            <canvas id="chartRecMdo"></canvas>
+          </div>
         </div>
         <div class="card">
           <h2><span class="tag">consolidado</span>Materiais — total do projeto</h2>
           <div class="tbl-wrap"><table id="tblMateriais"><thead><tr>
             <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
           </tr></thead><tbody></tbody></table></div>
+          <div class="toolbar-row" style="margin-top:16px;">
+            <div class="hint" style="margin:0;">Consumo de materiais por período (unidades ponderadas)</div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" data-recgroup="mat" data-period="semana">Semana</button>
+              <button class="btn small active" data-recgroup="mat" data-period="quinzena">Quinzena</button>
+              <button class="btn small" data-recgroup="mat" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <div style="position:relative;height:240px;">
+            <canvas id="chartRecMat"></canvas>
+          </div>
         </div>
         <div class="card">
           <h2><span class="tag">consolidado</span>Equipamentos — total do projeto</h2>
           <div class="tbl-wrap"><table id="tblEquipamentos"><thead><tr>
             <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
           </tr></thead><tbody></tbody></table></div>
+          <div class="toolbar-row" style="margin-top:16px;">
+            <div class="hint" style="margin:0;">Uso de equipamentos por período (unidades ponderadas)</div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" data-recgroup="equip" data-period="semana">Semana</button>
+              <button class="btn small active" data-recgroup="equip" data-period="quinzena">Quinzena</button>
+              <button class="btn small" data-recgroup="equip" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <div style="position:relative;height:240px;">
+            <canvas id="chartRecEquip"></canvas>
+          </div>
         </div>
       </div>
 
@@ -541,18 +579,29 @@ tr[draggable="true"]{cursor:default;}
               <button class="btn small active" id="btnPerQuinzena" data-period="quinzena">Quinzena</button>
               <button class="btn small" id="btnPerMes" data-period="mes">Mês</button>
             </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small active" id="btnFluxoViewChart" data-view="chart">Gráfico</button>
+              <button class="btn small" id="btnFluxoViewTable" data-view="table">Tabela</button>
+            </div>
           </div>
-          <div style="position:relative;height:280px;margin-bottom:18px;">
-            <div class="hint" style="margin-bottom:4px;">Mão de obra</div>
-            <canvas id="chartFluxoMdo"></canvas>
+          <div id="fluxoChartsWrap">
+            <div style="position:relative;height:280px;margin-bottom:18px;">
+              <div class="hint" style="margin-bottom:4px;">Mão de obra</div>
+              <canvas id="chartFluxoMdo"></canvas>
+            </div>
+            <div style="position:relative;height:280px;margin-bottom:18px;">
+              <div class="hint" style="margin-bottom:4px;">Material</div>
+              <canvas id="chartFluxoMat"></canvas>
+            </div>
+            <div style="position:relative;height:280px;">
+              <div class="hint" style="margin-bottom:4px;">Outros (equipamentos/extras)</div>
+              <canvas id="chartFluxoOutros"></canvas>
+            </div>
           </div>
-          <div style="position:relative;height:280px;margin-bottom:18px;">
-            <div class="hint" style="margin-bottom:4px;">Material</div>
-            <canvas id="chartFluxoMat"></canvas>
-          </div>
-          <div style="position:relative;height:280px;">
-            <div class="hint" style="margin-bottom:4px;">Outros (equipamentos/extras)</div>
-            <canvas id="chartFluxoOutros"></canvas>
+          <div class="tbl-wrap" id="fluxoTableWrap" style="display:none;">
+            <table id="tblFluxo"><thead><tr>
+              <th>Período</th><th class="num">Mão de obra (R$)</th><th class="num">Material (R$)</th><th class="num">Outros (R$)</th><th class="num">Total (R$)</th>
+            </tr></thead><tbody></tbody></table>
           </div>
           <div class="empty-state" id="emptyFluxo" style="display:none;">Sem cronograma calculado ainda.</div>
         </div>
@@ -560,15 +609,102 @@ tr[draggable="true"]{cursor:default;}
 
       <!-- ===================== ABAS EM CONSTRUÇÃO ===================== -->
       <div class="panel" id="panel-compras">
-        <div class="placeholder-panel">
-          <div class="big">Compras</div>
-          <p>Em breve. Tabela de compras realizadas atualizada diretamente do Telegram. Opção de inserir compras manualmente. Submenu com previsão de compras para semana, quinzena, mês ou mais.</p>
+        <div class="card">
+          <h2><span class="tag">contas</span>Contas bancárias cadastradas</h2>
+          <p class="desc">Cadastre as contas/bancos usados para pagar as compras da obra — elas aparecem no seletor "Banco" da tabela abaixo.</p>
+          <div class="toolbar-row">
+            <div id="bancosChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+            <button class="btn small primary" id="btnAddBanco">+ Cadastrar conta</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">compras</span>Compras realizadas</h2>
+            <button class="btn primary small" id="btnAddCompra">+ Adicionar compra</button>
+          </div>
+          <div class="stats" id="comprasStatsStrip"></div>
+          <div class="tbl-wrap" style="overflow-x:auto;">
+            <table id="tblCompras">
+              <thead><tr>
+                <th style="min-width:170px;">Item do orçamento</th>
+                <th style="width:110px;">Tipo</th>
+                <th style="width:120px;">Data</th>
+                <th style="min-width:120px;">Loja / nome</th>
+                <th style="width:110px;">Nº nota/PIX</th>
+                <th style="width:130px;">Forma pagto.</th>
+                <th style="width:60px;">Parc.</th>
+                <th style="width:120px;">Banco</th>
+                <th style="min-width:150px;">Descrição</th>
+                <th style="width:80px;" class="num">Quant.</th>
+                <th style="width:60px;">Unid.</th>
+                <th style="width:90px;" class="num">R$/unid</th>
+                <th style="width:100px;" class="num">Valor total</th>
+                <th style="width:34px;"></th>
+              </tr></thead>
+              <tbody id="tbodyCompras"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="emptyCompras" style="display:none;">
+            <div class="big">Nenhuma compra registrada</div>
+            Clique em "+ Adicionar compra" para começar.
+          </div>
         </div>
       </div>
       <div class="panel" id="panel-fluxocaixa">
-        <div class="placeholder-panel">
-          <div class="big">Fluxo de caixa</div>
-          <p>Atualização automática do custo de cada subitem de mão de obra, material e extra, com percentual de previsto × realizado e sinalizações de alerta.</p>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">recebimentos</span>Recebimentos</h2>
+            <button class="btn primary small" id="btnAddRecebimento">+ Adicionar recebimento</button>
+          </div>
+          <div class="tbl-wrap">
+            <table id="tblRecebimentos"><thead><tr>
+              <th style="width:120px;">Data</th><th style="width:150px;">Forma de pagamento</th>
+              <th class="num" style="width:120px;">Valor</th><th class="num" style="width:130px;">Valor acumulado</th><th style="width:34px;"></th>
+            </tr></thead><tbody id="tbodyRecebimentos"></tbody></table>
+          </div>
+          <div class="empty-state" id="emptyRecebimentos" style="display:none;">Nenhum recebimento registrado ainda.</div>
+        </div>
+
+        <div class="card">
+          <h2><span class="tag">previsto × realizado</span>Previsto × Realizado por item</h2>
+          <p class="desc">Compara o valor orçado de cada item/subitem (mão de obra, material, equipamento e extra) com o total já comprado/registrado em Compras.</p>
+          <div class="tbl-wrap">
+            <table id="tblPrevRealizado"><thead><tr>
+              <th>Item / Subitem</th><th style="width:90px;">Tipo</th><th class="num" style="width:110px;">Previsto (R$)</th>
+              <th class="num" style="width:110px;">Realizado (R$)</th><th class="num" style="width:80px;">% real.</th>
+            </tr></thead><tbody id="tbodyPrevRealizado"></tbody></table>
+          </div>
+          <div style="position:relative;height:320px;margin-top:14px;">
+            <canvas id="chartPrevRealizado"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">fluxo</span>Fluxo financeiro no tempo</h2>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" id="btnFcxPerSemana" data-period="semana">Semana</button>
+              <button class="btn small active" id="btnFcxPerQuinzena" data-period="quinzena">Quinzena</button>
+              <button class="btn small" id="btnFcxPerMes" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <p class="desc">Entradas (recebimentos) × saídas (compras registradas) em cada período da obra.</p>
+          <div class="tbl-wrap" style="margin-bottom:14px;">
+            <table id="tblFluxoCaixa"><thead><tr>
+              <th>Período</th><th class="num">Entradas (R$)</th><th class="num">Saídas (R$)</th><th class="num">Saldo período (R$)</th>
+            </tr></thead><tbody id="tbodyFluxoCaixa"></tbody></table>
+          </div>
+          <div style="position:relative;height:280px;">
+            <canvas id="chartFluxoCaixa"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2><span class="tag">saldo</span>Andamento do saldo da obra</h2>
+          <p class="desc">Saldo acumulado (recebimentos − gastos) ao longo do tempo da obra.</p>
+          <div style="position:relative;height:280px;">
+            <canvas id="chartSaldoObra"></canvas>
+          </div>
         </div>
       </div>
       <div class="panel" id="panel-composicoes">

@@ -88,6 +88,16 @@ def extract_prices(wb_formulas, wb_values):
     return comp_price, insumo_price
 
 
+def guess_referencia(xlsx_path):
+    """Tenta achar 'AAAA_MM' ou 'AAAA-MM' no nome do arquivo (ex: SINAPI_Referencia_2026_07.xlsx)
+    e devolve como 'AAAA/MM'. Se não achar, devolve None (o app mostra 'não identificada')."""
+    name = os.path.basename(xlsx_path)
+    m = re.search(r"(20\d{2})[_\-](\d{2})\b", name)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+    return None
+
+
 def convert(xlsx_path, out_path=None):
     import openpyxl
 
@@ -141,7 +151,7 @@ def convert(xlsx_path, out_path=None):
         for val in items.values():
             val.append(None)
 
-    data = {"items": items, "children": children, "tops": tops}
+    data = {"items": items, "children": children, "tops": tops, "meta": {"referencia": guess_referencia(xlsx_path)}}
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))

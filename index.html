@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Controle · Base SINAPI</title>
 <link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --bg: #14181d;
@@ -32,16 +34,15 @@
   --mono: 'JetBrains Mono', monospace;
   --sans: 'Inter', sans-serif;
   --disp: 'Space Grotesk', sans-serif;
+  --sidebar-w: 226px;
 }
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;height:100%;}
 body{
   background-image:
     linear-gradient(var(--line-soft) 1px, transparent 1px),
     linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
   background-size: 32px 32px;
-  background-attachment: fixed;
-  min-height:100vh;
 }
 ::selection{background:var(--accent-glow);color:var(--text);}
 ::-webkit-scrollbar{height:10px;width:10px;}
@@ -53,28 +54,47 @@ a{color:var(--accent);}
 button{font-family:var(--sans);cursor:pointer;}
 input,select{font-family:var(--sans);}
 
-/* ---------- layout shell ---------- */
-.shell{max-width:1500px;margin:0 auto;padding:20px 24px 80px;}
+/* ---------- layout: sidebar + main, full viewport ---------- */
+.app-shell{display:flex;height:100vh;width:100vw;overflow:hidden;}
 
-.topbar{
-  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
-  gap:12px 16px;padding:16px 20px;margin-bottom:18px;
-  background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--radius);
-  position:relative;overflow:hidden;
+.sidebar{
+  width:var(--sidebar-w);flex:none;display:flex;flex-direction:column;
+  background:var(--bg-panel);border-right:1px solid var(--line);overflow-y:auto;overflow-x:hidden;
 }
-.topbar::before{
-  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);
+.sidebar-brand{display:flex;align-items:center;gap:10px;padding:16px 14px;border-bottom:1px solid var(--line);}
+.brand-logo{height:30px;width:auto;display:block;flex:none;}
+.sidebar-brand h1{font-family:var(--disp);font-size:16px;font-weight:600;margin:0;letter-spacing:-0.01em;}
+
+.sidebar-project{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px;}
+.sidebar-project select.btn{width:100%;}
+.sidebar-project .row2{display:flex;gap:6px;}
+.sidebar-project .row2 .btn{flex:1;}
+
+.side-nav{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:2px;}
+.side-nav .navsep{height:1px;background:var(--line);margin:8px 4px;}
+.navbtn{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius);
+  background:none;border:none;color:var(--text-dim);font-size:12.5px;font-weight:500;
+  text-align:left;width:100%;font-family:var(--sans);
 }
-.brand{display:flex;align-items:center;gap:14px;}
-.brand-logo{height:38px;width:auto;display:block;}
-.brand .mark{
-  font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:0.12em;
-  color:var(--accent);border:1px solid var(--accent-dim);padding:3px 7px;border-radius:2px;
-  text-transform:uppercase;
+.navbtn:hover{background:var(--bg-panel-raised);color:var(--text);}
+.navbtn.active{background:var(--accent-glow);color:var(--accent);font-weight:600;}
+.navbtn .ico{width:15px;flex:none;text-align:center;font-family:var(--mono);font-size:12px;}
+.navbtn .count{margin-left:auto;background:var(--line);color:var(--text-dim);border-radius:8px;padding:0 6px;font-size:10px;}
+
+.main{flex:1;overflow-y:auto;min-width:0;}
+.main-inner{max-width:1500px;margin:0 auto;padding:22px 26px 60px;}
+
+.topbar-mobile{display:none;align-items:center;gap:10px;padding:12px 16px;background:var(--bg-panel);border-bottom:1px solid var(--line);}
+.hamburger{background:none;border:1px solid var(--line);color:var(--text);border-radius:4px;padding:6px 10px;font-size:16px;}
+
+@media(max-width:880px){
+  .app-shell{flex-direction:column;height:auto;min-height:100vh;overflow:visible;}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:900;transform:translateX(-100%);transition:transform .2s;width:250px;}
+  .sidebar.open{transform:translateX(0);box-shadow:0 0 40px rgba(0,0,0,0.5);}
+  .main{width:100%;}
+  .topbar-mobile{display:flex;}
 }
-.brand h1{font-family:var(--disp);font-size:18px;font-weight:600;margin:0;letter-spacing:-0.01em;}
-.brand .sub{color:var(--text-faint);font-size:12px;font-family:var(--mono);}
-.topbar-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 
 .btn{
   display:inline-flex;align-items:center;gap:6px;
@@ -89,34 +109,10 @@ input,select{font-family:var(--sans);}
 .btn.danger{color:var(--red);}
 .btn.small{padding:4px 9px;font-size:11.5px;}
 .btn.small.active{background:var(--accent);color:#241a08;border-color:var(--accent);font-weight:600;}
-.tr-orc-item td{background:#242b21;font-weight:600;color:var(--text);border-top:1px solid var(--line);}
-.tr-orc-item td:first-child{font-family:var(--mono);color:var(--accent);}
-.tr-orc-subitem td:first-child{font-family:var(--mono);color:var(--text-faint);font-size:11px;}
-#tblOrcamento thead th{white-space:normal;line-height:1.25;}
-#tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
 select.btn{appearance:none;-webkit-appearance:none;padding-right:26px;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%238a94a1'/></svg>");
   background-repeat:no-repeat;background-position:right 8px center;}
-.btn:disabled{opacity:.4;cursor:not-allowed;}
-.btn svg{width:13px;height:13px;flex:none;}
-
-/* ---------- tabs ---------- */
-.tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
-.tab{
-  padding:10px 16px;font-size:12.5px;font-weight:600;color:var(--text-faint);
-  border-bottom:2px solid transparent;letter-spacing:0.01em;font-family:var(--mono);
-  text-transform:uppercase;background:none;border-top:none;border-left:none;border-right:none;
-}
-.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
-.tab:hover:not(.active){color:var(--text-dim);}
-.tab .count{
-  display:inline-block;margin-left:6px;background:var(--line);color:var(--text-dim);
-  border-radius:8px;padding:0 6px;font-size:10px;font-family:var(--sans);
-}
-.tab.config-tab{margin-left:auto;color:var(--text-faint);}
-
-.panel{display:none;}
-.panel.active{display:block;}
 
 .card{
   background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--radius);
@@ -131,12 +127,23 @@ select.btn{appearance:none;-webkit-appearance:none;padding-right:26px;
   padding:1px 5px;border-radius:2px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;
 }
 .card .desc{color:var(--text-faint);font-size:12px;margin:0 0 14px;line-height:1.5;}
+.card-row2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media(max-width:800px){.card-row2{grid-template-columns:1fr;}}
 
-/* ---------- tables ---------- */
+.panel{display:none;}
+.panel.active{display:block;}
+
+.placeholder-panel{
+  border:1px dashed var(--line);border-radius:var(--radius);padding:60px 30px;text-align:center;
+  color:var(--text-dim);background:var(--bg-panel);
+}
+.placeholder-panel .big{font-family:var(--disp);font-size:20px;color:var(--text);margin-bottom:10px;}
+.placeholder-panel p{max-width:560px;margin:0 auto;line-height:1.6;color:var(--text-dim);font-size:13.5px;}
+
 .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);}
 table{width:100%;border-collapse:collapse;font-size:12.5px;}
 thead th{
-  text-align:left;background:var(--bg-inset);color:var(--text-faint);font-weight:600;
+  text-align:left;background:var(--bg-inset);color:var(--text-dim);font-weight:600;
   padding:8px 10px;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
   letter-spacing:0.04em;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:0;
 }
@@ -164,14 +171,13 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 }
 .icon-btn:hover{color:var(--red);background:rgba(217,105,91,0.1);}
 .icon-btn.expand:hover{color:var(--accent);background:var(--accent-glow);}
-.icon-btn svg{width:14px;height:14px;}
+.icon-btn.add:hover{color:var(--green);background:rgba(111,191,139,0.1);}
+.icon-btn.drag{cursor:grab;color:var(--text-faint);}
+.icon-btn.drag:hover{color:var(--text-dim);background:none;}
 
-.empty-state{
-  padding:40px 20px;text-align:center;color:var(--text-faint);font-size:13px;
-}
+.empty-state{padding:40px 20px;text-align:center;color:var(--text-faint);font-size:13px;}
 .empty-state .big{font-family:var(--disp);font-size:15px;color:var(--text-dim);margin-bottom:6px;}
 
-/* ---------- code search / autocomplete ---------- */
 .code-search{position:relative;}
 .code-search input{width:100%;}
 .acp{
@@ -188,7 +194,6 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .acp .acp-grupo{color:var(--text-faint);font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;}
 .acp-empty{padding:14px;color:var(--text-faint);font-size:12px;text-align:center;}
 
-/* ---------- stat strip ---------- */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:16px;}
 .stat{background:var(--bg-panel);padding:14px 16px;}
 .stat .lbl{font-family:var(--mono);font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
@@ -197,18 +202,12 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .stat .val .pct{font-size:13px;color:var(--text-dim);font-weight:500;margin-left:4px;}
 .stat.accent .val{color:var(--accent);}
 
-/* ---------- role/material/equip sub tables ---------- */
-.res-grid{display:flex;flex-wrap:wrap;gap:10px;}
-.res-grid table{min-width:280px;}
-
-/* ---------- gantt ---------- */
 .gantt-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-inset);}
 .gantt-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;}
 .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;}
 .legend .li{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-faint);}
 .legend .sw{width:10px;height:10px;border-radius:2px;}
 
-/* ---------- calendar (embutido no Cronograma) ---------- */
 .cal-toggle{
   display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
   font-family:var(--mono);font-size:11.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;
@@ -229,7 +228,6 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .field-row label{font-size:12px;color:var(--text-faint);width:150px;flex:none;}
 .field-row input, .field-row select{flex:1;}
 
-/* ---------- configuração ---------- */
 .config-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;}
 @media(max-width:800px){.config-grid{grid-template-columns:1fr;}}
 .config-grid .field-row{margin-bottom:0;flex-direction:column;align-items:flex-start;gap:4px;}
@@ -238,7 +236,6 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .danger-zone{border:1px solid rgba(217,105,91,0.35);background:rgba(217,105,91,0.06);border-radius:var(--radius);padding:16px 18px;margin-top:8px;}
 .danger-zone h3{font-family:var(--disp);font-size:13px;color:var(--red);margin:0 0 6px;}
 
-/* misc */
 .hint{font-size:11px;color:var(--text-faint);margin-top:4px;line-height:1.5;}
 .badge{display:inline-block;font-family:var(--mono);font-size:9.5px;padding:1px 6px;border-radius:2px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;}
 .badge.ok{background:rgba(111,191,139,0.14);color:var(--green);}
@@ -262,309 +259,409 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
 .modal-box input.cell{margin-bottom:10px;}
 .modal-box .modal-error{color:var(--red);font-size:12px;margin:-6px 0 12px;display:none;}
+
+/* ---------- orçamento: linhas item / subitem principal / drag ---------- */
+.tr-orc-item td{background:#242b21;font-weight:600;color:var(--text);border-top:1px solid var(--line);}
+.tr-orc-item td:nth-child(2){font-family:var(--mono);color:var(--accent);}
+.tr-orc-principal td{background:#1e2733;font-weight:600;color:var(--text);}
+.tr-orc-principal td:nth-child(2){font-family:var(--mono);color:var(--blue);}
+.tr-orc-principal input.cell{font-style:italic;}
+.tr-orc-subitem td:nth-child(2){font-family:var(--mono);color:var(--text-faint);font-size:11px;}
+.tr-orc-subitem.indent td:nth-child(2){padding-left:18px;}
+#tblOrcamento thead th{white-space:normal;line-height:1.25;}
+#tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
+tr.drag-over td{border-top:2px solid var(--accent) !important;}
+tr[draggable="true"]{cursor:default;}
+.orc-actions{display:flex;gap:2px;align-items:center;}
+.gantt-item-row{cursor:pointer;}
+.gantt-item-row:hover{background:rgba(255,255,255,0.03);}
 </style>
 </head>
 <body>
 
-<div class="shell">
+<div class="app-shell">
 
-  <div class="topbar">
-    <div class="brand">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
       <img src="logo.png" alt="Qorban Engenharia" class="brand-logo">
-      <div>
-        <h1>Controle</h1>
-        <div class="sub">Planejamento e orçamento de obras · Base SINAPI</div>
+      <h1>Controle</h1>
+    </div>
+    <div class="sidebar-project">
+      <select class="btn" id="projectSelect"></select>
+      <div class="row2">
+        <button class="btn small" id="btnNewProject" title="Criar novo projeto no banco de dados">+ Novo</button>
       </div>
+      <span class="hint" id="syncStatus"></span>
     </div>
-    <div class="topbar-actions">
-      <select class="btn" id="projectSelect" style="max-width:220px;"></select>
-      <button class="btn small" id="btnNewProject" title="Criar novo projeto no banco de dados">+ Novo</button>
-      <span class="hint" id="syncStatus" style="width:auto;"></span>
-    </div>
+    <nav class="side-nav" id="sideNav">
+      <button class="navbtn active" data-tab="orcamento"><span class="ico">1</span> Orçamento <span class="count" id="cOrc">0</span></button>
+      <button class="navbtn" data-tab="planejamento"><span class="ico">2</span> Planejamento <span class="count" id="cAtiv">0</span></button>
+      <button class="navbtn" data-tab="cronograma"><span class="ico">3</span> Cronograma</button>
+      <button class="navbtn" data-tab="bdi"><span class="ico">4</span> BDI</button>
+      <button class="navbtn" data-tab="recursos"><span class="ico">5</span> Recursos</button>
+      <button class="navbtn" data-tab="dashboard"><span class="ico">6</span> Dashboard</button>
+      <div class="navsep"></div>
+      <button class="navbtn" data-tab="compras"><span class="ico">7</span> Compras</button>
+      <button class="navbtn" data-tab="fluxocaixa"><span class="ico">8</span> Fluxo de caixa</button>
+      <button class="navbtn" data-tab="composicoes"><span class="ico">9</span> Composições</button>
+      <button class="navbtn" data-tab="quantitativos"><span class="ico">10</span> Quantitativos</button>
+      <div class="navsep"></div>
+      <button class="navbtn" data-tab="configuracao"><span class="ico">⚙</span> Configuração</button>
+    </nav>
   </div>
 
-  <div class="tabs">
-    <button class="tab active" data-tab="orcamento">Orçamento <span class="count" id="cOrc">0</span></button>
-    <button class="tab" data-tab="planejamento">Planejamento <span class="count" id="cAtiv">0</span></button>
-    <button class="tab" data-tab="cronograma">Cronograma</button>
-    <button class="tab" data-tab="bdi">BDI</button>
-    <button class="tab" data-tab="recursos">Recursos</button>
-    <button class="tab" data-tab="dashboard">Dashboard</button>
-    <button class="tab config-tab" data-tab="configuracao">⚙ Configuração</button>
-  </div>
-
-  <!-- ===================== ORÇAMENTO ===================== -->
-  <div class="panel active" id="panel-orcamento">
-    <div class="stats" id="orcStatsStrip"></div>
-    <div class="card">
-      <h2><span class="tag">EAP</span>Estrutura analítica do orçamento</h2>
-      <div class="toolbar-row">
-        <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
-        <span class="hint" id="orcLoadStatus"></span>
-      </div>
-      <div class="tbl-wrap" style="overflow-x:auto;">
-        <table id="tblOrcamento">
-          <thead>
-            <tr>
-              <th colspan="4" style="text-align:center;background:#2a2216;">ORÇAMENTO</th>
-              <th colspan="3" style="text-align:center;background:#1f2d3a;">SINAPI</th>
-              <th colspan="4" style="text-align:center;background:#1f2d3a;">Custos reais</th>
-              <th colspan="5" style="text-align:center;background:#2a2216;">Custos sem BDI</th>
-              <th colspan="2" style="text-align:center;background:#1f2d3a;">Valores</th>
-              <th rowspan="2" style="width:70px;">Incid. (%)</th>
-              <th rowspan="2" style="width:26px;"></th>
-            </tr>
-            <tr>
-              <th style="width:56px;">Item</th>
-              <th style="min-width:220px;">Discriminação do evento</th>
-              <th style="width:80px;" class="num">Quant.</th>
-              <th style="width:60px;">Unid.</th>
-              <th style="width:150px;">SINAPI</th>
-              <th style="width:90px;" class="num">MDO (R$)</th>
-              <th style="width:90px;" class="num">Taxa extra MDO (R$)</th>
-              <th style="width:90px;" class="num">MAT (R$)</th>
-              <th style="width:90px;" class="num">Taxa extra MAT (R$)</th>
-              <th style="width:90px;" class="num">EQUIP (R$)</th>
-              <th style="width:80px;" class="num">Taxa extra EQUIP (%)</th>
-              <th style="width:100px;" class="num">Tot. sem BDI/unid.</th>
-              <th style="width:100px;" class="num">Tot. MDO sem BDI</th>
-              <th style="width:100px;" class="num">Tot. MAT sem BDI</th>
-              <th style="width:100px;" class="num">Tot. EQUIP sem BDI</th>
-              <th style="width:100px;" class="num">Total sem BDI</th>
-              <th style="width:100px;" class="num">Valor unit.</th>
-              <th style="width:100px;" class="num">Valor total</th>
-            </tr>
-          </thead>
-          <tbody id="tbodyOrcamento"></tbody>
-        </table>
-      </div>
-      <div class="empty-state" id="emptyOrcamento" style="display:none;">
-        <div class="big">Orçamento vazio</div>
-        Clique em "+ Adicionar linha" para começar, ou crie um novo projeto e escolha usar a EAP Padrão.
-      </div>
+  <div class="main">
+    <div class="topbar-mobile">
+      <button class="hamburger" id="btnHamburger">☰</button>
+      <img src="logo.png" alt="" style="height:24px;">
+      <strong style="font-family:var(--disp);">Controle</strong>
     </div>
-  </div>
 
-  <!-- ===================== PLANEJAMENTO ===================== -->
-  <div class="panel" id="panel-planejamento">
-    <div class="card">
-      <h2><span class="tag">equipe &amp; prazos</span>Planejamento das atividades</h2>
-      <p class="desc">Estas linhas vêm automaticamente dos subitens do Orçamento. Aqui você define predecessoras e quantas pessoas de cada função trabalham em cada atividade — a duração recalcula sozinha.</p>
-      <div class="tbl-wrap">
-        <table id="tblAtividades">
-          <thead>
-            <tr>
-              <th style="width:22px"></th>
-              <th style="width:34px">#</th>
-              <th>Descrição</th>
-              <th style="width:110px">Código SINAPI</th>
-              <th style="width:60px">Un.</th>
-              <th style="width:90px" class="num">Quantidade</th>
-              <th style="width:140px">Predecessoras</th>
-              <th style="width:70px" class="num">Duração</th>
-              <th style="width:100px">Início</th>
-              <th style="width:100px">Fim</th>
-            </tr>
-          </thead>
-          <tbody id="tbodyAtividades"></tbody>
-        </table>
-      </div>
-      <div class="empty-state" id="emptyAtividades" style="display:none;">
-        <div class="big">Nenhum subitem no orçamento ainda</div>
-        Vá até a aba Orçamento e adicione subitens — eles aparecem aqui automaticamente.
-      </div>
-      <p class="hint">
-        <b>Predecessoras:</b> use o número da atividade (#), com folga opcional em dias. Ex.: <code>2</code> (começa após a atividade 2 terminar) · <code>2+3</code> (3 dias de folga depois) · <code>2-2</code> (2 dias de antecipação/sobreposição) · <code>2,5+1</code> (múltiplas predecessoras separadas por vírgula).
-      </p>
-    </div>
-  </div>
+    <div class="main-inner">
 
-  <!-- ===================== CRONOGRAMA ===================== -->
-  <div class="panel" id="panel-cronograma">
-    <div class="stats" id="statsStrip"></div>
-    <div class="card">
-      <h2><span class="tag">gantt</span>Cronograma visual</h2>
-      <p class="desc">Barras proporcionais aos dias de calendário; dias não úteis (fins de semana e feriados) aparecem hachurados.</p>
-      <div class="gantt-toolbar">
-        <div class="legend">
-          <span class="li"><span class="sw" style="background:var(--accent)"></span> Atividade</span>
-          <span class="li"><span class="sw" style="background:var(--red)"></span> Atraso vs. hoje</span>
-          <span class="li"><span class="sw" style="background:repeating-linear-gradient(45deg,#333 0,#333 3px,#222 3px,#222 6px)"></span> Não útil / feriado</span>
+      <!-- ===================== ORÇAMENTO ===================== -->
+      <div class="panel active" id="panel-orcamento">
+        <div class="stats" id="orcStatsStrip"></div>
+        <div class="card">
+          <h2><span class="tag">EAP</span>Estrutura analítica do orçamento</h2>
+          <div class="toolbar-row">
+            <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
+            <span class="hint" id="orcLoadStatus"></span>
+          </div>
+          <div class="tbl-wrap" style="overflow-x:auto;">
+            <table id="tblOrcamento">
+              <thead>
+                <tr>
+                  <th rowspan="2" style="width:24px;"></th>
+                  <th colspan="4" style="text-align:center;background:#2a2216;">ORÇAMENTO</th>
+                  <th colspan="3" style="text-align:center;background:#1f2d3a;">SINAPI</th>
+                  <th colspan="4" style="text-align:center;background:#1f2d3a;">Custos reais</th>
+                  <th colspan="5" style="text-align:center;background:#2a2216;">Custos sem BDI</th>
+                  <th colspan="2" style="text-align:center;background:#1f2d3a;">Valores</th>
+                  <th rowspan="2" style="width:70px;">Incid. (%)</th>
+                  <th rowspan="2" style="width:50px;">Ações</th>
+                </tr>
+                <tr>
+                  <th style="width:56px;">Item</th>
+                  <th style="min-width:220px;">Discriminação do evento</th>
+                  <th style="width:80px;" class="num">Quant.</th>
+                  <th style="width:60px;">Unid.</th>
+                  <th style="width:150px;">SINAPI</th>
+                  <th style="width:90px;" class="num">MDO (R$)</th>
+                  <th style="width:90px;" class="num">Taxa extra MDO (R$)</th>
+                  <th style="width:90px;" class="num">MAT (R$)</th>
+                  <th style="width:90px;" class="num">Taxa extra MAT (R$)</th>
+                  <th style="width:90px;" class="num">EQUIP (R$)</th>
+                  <th style="width:80px;" class="num">Taxa extra EQUIP (%)</th>
+                  <th style="width:100px;" class="num">Tot. sem BDI/unid.</th>
+                  <th style="width:100px;" class="num">Tot. MDO sem BDI</th>
+                  <th style="width:100px;" class="num">Tot. MAT sem BDI</th>
+                  <th style="width:100px;" class="num">Tot. EQUIP sem BDI</th>
+                  <th style="width:100px;" class="num">Total sem BDI</th>
+                  <th style="width:100px;" class="num">Valor unit.</th>
+                  <th style="width:100px;" class="num">Valor total</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyOrcamento"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="emptyOrcamento" style="display:none;">
+            <div class="big">Orçamento vazio</div>
+            Clique em "+ Adicionar linha" para começar, ou crie um novo projeto e escolha usar a EAP Padrão.
+          </div>
+          <p class="hint">Arraste pela alcinha (⠿) para reordenar — mover um Item leva todo o grupo junto.</p>
         </div>
       </div>
-      <div class="gantt-wrap" id="ganttWrap">
-        <div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>
-      </div>
-    </div>
 
-    <div class="card">
-      <div class="cal-toggle" id="calToggle"><span class="chev">▸</span> Calendário de trabalho (dias úteis, jornada e feriados)</div>
-      <div class="cal-body" id="calBody">
-        <div class="cal-grid">
-          <div>
-            <h2 style="font-size:13px;"><span class="tag">jornada</span>Dias e horas de trabalho</h2>
-            <p class="desc">Define quais dias da semana são úteis e quantas horas de trabalho cada um oferece (usado para converter horas SINAPI em duração real).</p>
-            <div id="weekdayConfig"></div>
-            <div class="field-row" style="margin-top:14px;">
-              <label>Início do projeto</label>
-              <input type="date" id="projStart" class="cell">
+      <!-- ===================== PLANEJAMENTO ===================== -->
+      <div class="panel" id="panel-planejamento">
+        <div class="card">
+          <h2><span class="tag">equipe &amp; prazos</span>Planejamento das atividades</h2>
+          <p class="desc">Estas linhas vêm automaticamente dos subitens do Orçamento. Aqui você define predecessoras e quantas pessoas de cada função trabalham em cada atividade — a duração recalcula sozinha.</p>
+          <div class="tbl-wrap">
+            <table id="tblAtividades">
+              <thead>
+                <tr>
+                  <th style="width:22px"></th>
+                  <th style="width:34px">#</th>
+                  <th>Descrição</th>
+                  <th style="width:110px">Código SINAPI</th>
+                  <th style="width:60px">Un.</th>
+                  <th style="width:90px" class="num">Quantidade</th>
+                  <th style="width:140px">Predecessoras</th>
+                  <th style="width:70px" class="num">Duração</th>
+                  <th style="width:100px">Início</th>
+                  <th style="width:100px">Fim</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyAtividades"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="emptyAtividades" style="display:none;">
+            <div class="big">Nenhum subitem no orçamento ainda</div>
+            Vá até a aba Orçamento e adicione subitens — eles aparecem aqui automaticamente.
+          </div>
+          <p class="hint">
+            <b>Predecessoras:</b> use o número da atividade (#), com folga opcional em dias. Ex.: <code>2</code> · <code>2+3</code> (folga) · <code>2-2</code> (antecipação) · <code>2,5+1</code> (múltiplas).
+          </p>
+        </div>
+      </div>
+
+      <!-- ===================== CRONOGRAMA ===================== -->
+      <div class="panel" id="panel-cronograma">
+        <div class="stats" id="statsStrip"></div>
+        <div class="card">
+          <h2><span class="tag">gantt</span>Cronograma visual</h2>
+          <p class="desc">Barras proporcionais aos dias de calendário; dias não úteis (fins de semana e feriados) aparecem hachurados.</p>
+          <div class="gantt-toolbar">
+            <div class="legend">
+              <span class="li"><span class="sw" style="background:var(--accent)"></span> Atividade</span>
+              <span class="li"><span class="sw" style="background:var(--red)"></span> Atraso vs. hoje</span>
+              <span class="li"><span class="sw" style="background:repeating-linear-gradient(45deg,#333 0,#333 3px,#222 3px,#222 6px)"></span> Não útil / feriado</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small active" id="btnGanttSubitens" data-level="subitem">Nível: Subitens</button>
+              <button class="btn small" id="btnGanttItens" data-level="item">Nível: Itens</button>
             </div>
           </div>
-          <div>
-            <h2 style="font-size:13px;"><span class="tag">feriados</span>Feriados</h2>
-            <p class="desc">Nacionais, estaduais (Piauí) e municipais (Teresina) já incluídos. Desmarque, edite ou adicione novos conforme necessário.</p>
-            <div class="toolbar-row">
-              <div style="display:flex;gap:8px;align-items:center;">
-                <input type="number" id="genYear" class="cell" style="width:80px" value="2026">
-                <button class="btn small" id="btnGenHolidays">Gerar feriados do ano</button>
+          <div class="gantt-wrap" id="ganttWrap">
+            <div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="cal-toggle" id="calToggle"><span class="chev">▸</span> Calendário de trabalho (dias úteis, jornada e feriados)</div>
+          <div class="cal-body" id="calBody">
+            <div class="cal-grid">
+              <div>
+                <h2 style="font-size:13px;"><span class="tag">jornada</span>Dias e horas de trabalho</h2>
+                <p class="desc">Define quais dias da semana são úteis e quantas horas de trabalho cada um oferece.</p>
+                <div id="weekdayConfig"></div>
+                <div class="field-row" style="margin-top:14px;">
+                  <label>Início do projeto</label>
+                  <input type="date" id="projStart" class="cell">
+                </div>
               </div>
-              <button class="btn small primary" id="btnAddHoliday">+ Feriado manual</button>
-            </div>
-            <div class="tbl-wrap" style="max-height:360px;overflow-y:auto;">
-              <table id="tblFeriados"><thead><tr>
-                <th style="width:26px"></th><th style="width:110px">Data</th><th>Nome</th><th style="width:80px">Esfera</th><th style="width:30px"></th>
-              </tr></thead><tbody></tbody></table>
+              <div>
+                <h2 style="font-size:13px;"><span class="tag">feriados</span>Feriados</h2>
+                <p class="desc">Nacionais, estaduais (Piauí) e municipais (Teresina) já incluídos.</p>
+                <div class="toolbar-row">
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="number" id="genYear" class="cell" style="width:80px" value="2026">
+                    <button class="btn small" id="btnGenHolidays">Gerar feriados do ano</button>
+                  </div>
+                  <button class="btn small primary" id="btnAddHoliday">+ Feriado manual</button>
+                </div>
+                <div class="tbl-wrap" style="max-height:360px;overflow-y:auto;">
+                  <table id="tblFeriados"><thead><tr>
+                    <th style="width:26px"></th><th style="width:110px">Data</th><th>Nome</th><th style="width:80px">Esfera</th><th style="width:30px"></th>
+                  </tr></thead><tbody></tbody></table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      <!-- ===================== BDI ===================== -->
+      <div class="panel" id="panel-bdi">
+        <div class="card" style="max-width:480px;">
+          <h2><span class="tag">bdi</span>Bonificação e despesas indiretas</h2>
+          <p class="desc">Percentual aplicado sobre o custo sem BDI de cada subitem para chegar no "Valor unit." e "Valor total" do orçamento.</p>
+          <div class="field-row">
+            <label>BDI (%)</label>
+            <input type="number" id="bdiPercent" class="cell" step="0.01" min="0" value="0" style="max-width:120px;">
+          </div>
+          <p class="hint">Referências comuns de mercado para obras residenciais: 20% a 30% (varia com regime tributário, risco e administração local).</p>
+        </div>
+      </div>
+
+      <!-- ===================== RECURSOS ===================== -->
+      <div class="panel" id="panel-recursos">
+        <div class="card">
+          <h2><span class="tag">consolidado</span>Mão de obra — total do projeto</h2>
+          <p class="desc">Soma de horas por função, considerando todas as atividades e a quantidade de trabalhadores alocada em cada uma.</p>
+          <div class="tbl-wrap"><table id="tblMaoObra"><thead><tr>
+            <th>Função</th><th class="num">Horas totais</th><th class="num">Homens-dia (8h)</th>
+          </tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">consolidado</span>Materiais — total do projeto</h2>
+          <div class="tbl-wrap"><table id="tblMateriais"><thead><tr>
+            <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
+          </tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">consolidado</span>Equipamentos — total do projeto</h2>
+          <div class="tbl-wrap"><table id="tblEquipamentos"><thead><tr>
+            <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
+          </tr></thead><tbody></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- ===================== DASHBOARD ===================== -->
+      <div class="panel" id="panel-dashboard">
+        <div class="stats" id="dashStatsStrip"></div>
+
+        <div class="card">
+          <h2><span class="tag">curva abc</span>Curva ABC da obra</h2>
+          <p class="desc">Barras = valor de cada linha (maior para menor). Linha = percentual acumulado. Faixa A até 80%, B até 95%, C o restante.</p>
+          <div class="toolbar-row">
+            <div class="legend">
+              <span class="li"><span class="sw" style="background:var(--accent)"></span> Classe A (0–80%)</span>
+              <span class="li"><span class="sw" style="background:var(--blue)"></span> Classe B (80–95%)</span>
+              <span class="li"><span class="sw" style="background:var(--text-faint)"></span> Classe C (95–100%)</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small active" id="btnAbcItens" data-level="item">Nível: Itens</button>
+              <button class="btn small" id="btnAbcSubitens" data-level="subitem">Nível: Subitens</button>
+            </div>
+          </div>
+          <div style="position:relative;height:400px;">
+            <canvas id="chartAbc"></canvas>
+          </div>
+          <div class="empty-state" id="emptyDashboard" style="display:none;">Sem dados de orçamento ainda.</div>
+        </div>
+
+        <div class="card">
+          <h2><span class="tag">por item</span>Custo total por Item</h2>
+          <p class="desc">Valor total (com BDI) de cada item do orçamento, do maior para o menor.</p>
+          <div style="position:relative;height:400px;">
+            <canvas id="chartPorItem"></canvas>
+          </div>
+          <div class="empty-state" id="emptyPorItem" style="display:none;">Sem itens no orçamento ainda.</div>
+        </div>
+
+        <div class="card">
+          <h2><span class="tag">fluxo</span>Dispêndio financeiro ao longo da obra</h2>
+          <p class="desc">Distribui o valor de cada subitem (com BDI) pelos dias úteis do seu cronograma, somando por período. Mostra quanto a obra "gasta" em mão de obra, material e outros (equipamentos/extras) em cada janela de tempo.</p>
+          <div class="toolbar-row">
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" id="btnPerSemana" data-period="semana">Semana</button>
+              <button class="btn small active" id="btnPerQuinzena" data-period="quinzena">Quinzena</button>
+              <button class="btn small" id="btnPerMes" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <div style="position:relative;height:280px;margin-bottom:18px;">
+            <div class="hint" style="margin-bottom:4px;">Mão de obra</div>
+            <canvas id="chartFluxoMdo"></canvas>
+          </div>
+          <div style="position:relative;height:280px;margin-bottom:18px;">
+            <div class="hint" style="margin-bottom:4px;">Material</div>
+            <canvas id="chartFluxoMat"></canvas>
+          </div>
+          <div style="position:relative;height:280px;">
+            <div class="hint" style="margin-bottom:4px;">Outros (equipamentos/extras)</div>
+            <canvas id="chartFluxoOutros"></canvas>
+          </div>
+          <div class="empty-state" id="emptyFluxo" style="display:none;">Sem cronograma calculado ainda.</div>
+        </div>
+      </div>
+
+      <!-- ===================== ABAS EM CONSTRUÇÃO ===================== -->
+      <div class="panel" id="panel-compras">
+        <div class="placeholder-panel">
+          <div class="big">Compras</div>
+          <p>Em breve. Tabela de compras realizadas atualizada diretamente do Telegram. Opção de inserir compras manualmente. Submenu com previsão de compras para semana, quinzena, mês ou mais.</p>
+        </div>
+      </div>
+      <div class="panel" id="panel-fluxocaixa">
+        <div class="placeholder-panel">
+          <div class="big">Fluxo de caixa</div>
+          <p>Atualização automática do custo de cada subitem de mão de obra, material e extra, com percentual de previsto × realizado e sinalizações de alerta.</p>
+        </div>
+      </div>
+      <div class="panel" id="panel-composicoes">
+        <div class="placeholder-panel">
+          <div class="big">Composições</div>
+          <p>Mostra as composições usadas. Criação de composições próprias.</p>
+        </div>
+      </div>
+      <div class="panel" id="panel-quantitativos">
+        <div class="placeholder-panel">
+          <div class="big">Quantitativos</div>
+          <p>Realização do cálculo da quantidade de cada subitem do orçamento.</p>
+        </div>
+      </div>
+
+      <!-- ===================== CONFIGURAÇÃO ===================== -->
+      <div class="panel" id="panel-configuracao">
+        <div class="card">
+          <h2><span class="tag">obra</span>Dados da obra</h2>
+          <div class="config-grid">
+            <div class="field-row">
+              <label>Nome da obra</label>
+              <input type="text" id="cfgNome" class="cell" placeholder="Nome do projeto">
+            </div>
+            <div class="field-row">
+              <label>Data de criação</label>
+              <input type="text" id="cfgCriadoEm" class="cell" readonly>
+            </div>
+            <div class="field-row">
+              <label>Nome do cliente</label>
+              <input type="text" id="cfgCliente" class="cell" placeholder="Nome do cliente">
+            </div>
+            <div class="field-row">
+              <label>Telefone</label>
+              <input type="tel" id="cfgTelefone" class="cell" placeholder="(86) 9 9999-9999">
+            </div>
+            <div class="field-row">
+              <label>E-mail</label>
+              <input type="email" id="cfgEmail" class="cell" placeholder="cliente@email.com">
+            </div>
+            <div class="field-row">
+              <label>Endereço da obra</label>
+              <input type="text" id="cfgEndereco" class="cell" placeholder="Rua, número, bairro, cidade">
+            </div>
+            <div class="field-row">
+              <label>Tipo</label>
+              <select id="cfgTipo" class="cell">
+                <option value="Residencial">Residencial</option>
+                <option value="Comercial">Comercial</option>
+                <option value="Industrial">Industrial</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <label>Subtipo</label>
+              <select id="cfgSubtipo" class="cell">
+                <option value="Construção">Construção</option>
+                <option value="Reforma">Reforma</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-row2">
+          <div class="card">
+            <h2><span class="tag">base sinapi</span>Composições SINAPI</h2>
+            <p class="desc" id="dataStamp">carregando base…</p>
+            <div class="toolbar-row">
+              <input type="file" id="sinapiUpload" class="file-input-hidden" accept=".xlsx">
+              <button class="btn" id="btnUpdateSinapi" title="Importar planilha SINAPI atualizada (mensal)">↻ Atualizar base SINAPI</button>
+            </div>
+            <span class="hint" id="loadStatus"></span>
+          </div>
+          <div class="card">
+            <h2><span class="tag">exportar</span>Relatórios</h2>
+            <p class="desc">Baixa uma planilha Excel com cronograma, mão de obra, materiais, equipamentos e orçamento completos.</p>
+            <div class="toolbar-row">
+              <button class="btn" id="btnExport">⇩ Exportar Excel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="danger-zone">
+            <h3>Excluir obra</h3>
+            <p class="desc" style="margin-bottom:12px;">Isso apaga permanentemente este projeto do banco de dados — orçamento, cronograma, tudo. Não tem como desfazer.</p>
+            <button class="btn danger" id="btnDeleteProject">Excluir esta obra</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-note">Copyright 2026 - Qorban Engenharia - Controle - Site by Eng. João Batista Rios Filho</div>
     </div>
   </div>
-
-  <!-- ===================== BDI ===================== -->
-  <div class="panel" id="panel-bdi">
-    <div class="card" style="max-width:480px;">
-      <h2><span class="tag">bdi</span>Bonificação e despesas indiretas</h2>
-      <p class="desc">Percentual aplicado sobre o custo sem BDI de cada subitem para chegar no "Valor unit." e "Valor total" do orçamento.</p>
-      <div class="field-row">
-        <label>BDI (%)</label>
-        <input type="number" id="bdiPercent" class="cell" step="0.01" min="0" value="0" style="max-width:120px;">
-      </div>
-      <p class="hint">Referências comuns de mercado para obras residenciais: 20% a 30% (varia com regime tributário, risco e administração local — ajuste conforme sua realidade).</p>
-    </div>
-  </div>
-
-  <!-- ===================== RECURSOS ===================== -->
-  <div class="panel" id="panel-recursos">
-    <div class="card">
-      <h2><span class="tag">consolidado</span>Mão de obra — total do projeto</h2>
-      <p class="desc">Soma de horas por função, considerando todas as atividades e a quantidade de trabalhadores alocada em cada uma.</p>
-      <div class="tbl-wrap"><table id="tblMaoObra"><thead><tr>
-        <th>Função</th><th class="num">Horas totais</th><th class="num">Homens-dia (8h)</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>
-    <div class="card">
-      <h2><span class="tag">consolidado</span>Materiais — total do projeto</h2>
-      <div class="tbl-wrap"><table id="tblMateriais"><thead><tr>
-        <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>
-    <div class="card">
-      <h2><span class="tag">consolidado</span>Equipamentos — total do projeto</h2>
-      <div class="tbl-wrap"><table id="tblEquipamentos"><thead><tr>
-        <th class="code">Código</th><th>Descrição</th><th style="width:60px">Un.</th><th class="num">Quantidade</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>
-  </div>
-
-  <!-- ===================== DASHBOARD ===================== -->
-  <div class="panel" id="panel-dashboard">
-    <div class="stats" id="dashStatsStrip"></div>
-    <div class="card">
-      <h2><span class="tag">curva abc</span>Curva ABC da obra</h2>
-      <p class="desc">Barras = valor de cada linha (maior para menor). Linha = percentual acumulado do orçamento. Faixa A cobre até 80% do valor total, B até 95%, C o restante.</p>
-      <div class="toolbar-row">
-        <div class="legend">
-          <span class="li"><span class="sw" style="background:var(--accent)"></span> Classe A (0–80%)</span>
-          <span class="li"><span class="sw" style="background:var(--blue)"></span> Classe B (80–95%)</span>
-          <span class="li"><span class="sw" style="background:var(--text-faint)"></span> Classe C (95–100%)</span>
-        </div>
-        <div style="display:flex;gap:6px;">
-          <button class="btn small active" id="btnAbcItens" data-level="item">Nível: Itens</button>
-          <button class="btn small" id="btnAbcSubitens" data-level="subitem">Nível: Subitens</button>
-        </div>
-      </div>
-      <div style="position:relative;height:420px;">
-        <canvas id="chartAbc"></canvas>
-      </div>
-      <div class="empty-state" id="emptyDashboard" style="display:none;">Sem dados de orçamento ainda.</div>
-    </div>
-  </div>
-
-  <!-- ===================== CONFIGURAÇÃO ===================== -->
-  <div class="panel" id="panel-configuracao">
-    <div class="card">
-      <h2><span class="tag">obra</span>Dados da obra</h2>
-      <div class="config-grid">
-        <div class="field-row">
-          <label>Nome da obra</label>
-          <input type="text" id="cfgNome" class="cell" placeholder="Nome do projeto">
-        </div>
-        <div class="field-row">
-          <label>Data de criação</label>
-          <input type="text" id="cfgCriadoEm" class="cell" readonly>
-        </div>
-        <div class="field-row">
-          <label>Nome do cliente</label>
-          <input type="text" id="cfgCliente" class="cell" placeholder="Nome do cliente">
-        </div>
-        <div class="field-row">
-          <label>Telefone</label>
-          <input type="tel" id="cfgTelefone" class="cell" placeholder="(86) 9 9999-9999">
-        </div>
-        <div class="field-row">
-          <label>E-mail</label>
-          <input type="email" id="cfgEmail" class="cell" placeholder="cliente@email.com">
-        </div>
-        <div class="field-row">
-          <label>Endereço da obra</label>
-          <input type="text" id="cfgEndereco" class="cell" placeholder="Rua, número, bairro, cidade">
-        </div>
-        <div class="field-row">
-          <label>Tipo</label>
-          <select id="cfgTipo" class="cell">
-            <option value="Residencial">Residencial</option>
-            <option value="Comercial">Comercial</option>
-            <option value="Industrial">Industrial</option>
-          </select>
-        </div>
-        <div class="field-row">
-          <label>Subtipo</label>
-          <select id="cfgSubtipo" class="cell">
-            <option value="Construção">Construção</option>
-            <option value="Reforma">Reforma</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="tag">base sinapi</span>Composições SINAPI</h2>
-      <p class="desc" id="dataStamp">carregando base…</p>
-      <div class="toolbar-row">
-        <input type="file" id="sinapiUpload" class="file-input-hidden" accept=".xlsx">
-        <button class="btn" id="btnUpdateSinapi" title="Importar planilha SINAPI atualizada (mensal)">↻ Atualizar base SINAPI</button>
-        <span class="hint" id="loadStatus"></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="tag">exportar</span>Relatórios</h2>
-      <div class="toolbar-row">
-        <button class="btn" id="btnExport">⇩ Exportar Excel</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="danger-zone">
-        <h3>Excluir obra</h3>
-        <p class="desc" style="margin-bottom:12px;">Isso apaga permanentemente este projeto do banco de dados — orçamento, cronograma, tudo. Não tem como desfazer.</p>
-        <button class="btn danger" id="btnDeleteProject">Excluir esta obra</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="footer-note">Dados de composição: SINAPI — Sistema Nacional de Pesquisa de Custos e Índices da Construção Civil (referência 2026/06)</div>
 </div>
 
 <div class="toast" id="toast"></div>

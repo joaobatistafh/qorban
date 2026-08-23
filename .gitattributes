@@ -1,0 +1,9 @@
+# Padroniza os finais de linha como LF para todo mundo (Windows, Mac, Linux),
+# independente da configuração local de core.autocrlf de cada um.
+* text=auto eol=lf
+
+# Binários — nunca tocar nos finais de linha nem tentar "converter" texto neles
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary

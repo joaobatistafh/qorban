@@ -2,16 +2,22 @@
    CONTROLE · Base SINAPI
    ============================================================ */
 
-let DB = { items: {}, children: {}, tops: [] };
-let unitMemo = {};           // codigo -> {roles,materials,equip} POR UNIDADE (qty=1)
+let DB = { items: {}, children: {}, tops: [], meta: {} };
+let unitMemo = {};
 let calendar = null;
 let toastTimer = null;
 
-let orcamento = [];           // lista de linhas do orçamento (itens e subitens) — também são as atividades do Planejamento
+let orcamento = [];
 let nextOrcId = 1;
 let bdiPercent = 0;
-let abcLevel = 'item';        // 'item' ou 'subitem' — granularidade do gráfico Curva ABC
+let abcLevel = 'item';
 let abcChart = null;
+let porItemChart = null;
+let fluxoCharts = {mdo:null, mat:null, outros:null};
+let fluxoPeriod = 'quinzena';
+let ganttLevel = 'subitem';
+let pendingFocusId = null;
+let dragBlockIds = null;
 
 /* ---------------- utilidades ---------------- */
 function normalize(s){
@@ -47,7 +53,6 @@ function showToast(msg){
 }
 
 function showModal(title, message, buttons){
-  // buttons: [{label, value, primary?, danger?}]
   return new Promise(resolve=>{
     const overlay = document.getElementById('modalOverlay');
     const box = document.getElementById('modalBox');
@@ -106,14 +111,19 @@ async function loadSinapi(){
     const res = await fetch('sinapi_data.json');
     if(!res.ok) throw new Error('http '+res.status);
     DB = await res.json();
+    if(!DB.meta) DB.meta = {};
     unitMemo = {};
-    document.getElementById('dataStamp').textContent = `${DB.tops.length.toLocaleString('pt-BR')} composições carregadas`;
+    updateDataStamp();
     document.getElementById('loadStatus').textContent = '';
   }catch(e){
     document.getElementById('dataStamp').textContent = 'falha ao carregar base — use "Atualizar base SINAPI"';
     document.getElementById('loadStatus').textContent = 'Base SINAPI não encontrada. Envie a planilha atualizada pelo botão acima.';
     console.error(e);
   }
+}
+function updateDataStamp(sufixo){
+  const ref = DB.meta && DB.meta.referencia ? `referência ${DB.meta.referencia}` : 'referência não identificada';
+  document.getElementById('dataStamp').textContent = `${DB.tops.length.toLocaleString('pt-BR')} composições carregadas — ${ref}${sufixo||''}`;
 }
 
 let EAP_PADRAO = null;
@@ -125,7 +135,6 @@ async function loadEapPadrao(){
   return EAP_PADRAO;
 }
 
-/* Parser client-side de uma planilha SINAPI Analítico (mesmo layout oficial) */
 function parseSinapiWorkbook(wb){
   const sheetName = wb.SheetNames.includes('Analítico') ? 'Analítico' : wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
@@ -145,14 +154,13 @@ function parseSinapiWorkbook(wb){
       (children[codComp] = children[codComp]||[]).push([tflag, codItem, coef]);
     }
   }
-  return {items, children, tops};
+  return {items, children, tops, meta:{}};
 }
 
 /* ============================================================
    2. EXPANSÃO RECURSIVA DAS COMPOSIÇÕES
    ============================================================ */
 function emptyBreakdown(){ return {roles:{}, materials:{}, equip:{}}; }
-
 function addTo(bucket, code, desc, unit, qty){
   if(!bucket[code]) bucket[code] = {desc, unit, qty:0};
   bucket[code].qty += qty;
@@ -165,35 +173,20 @@ function mergeScaled(target, source, factor){
     }
   }
 }
-
 function computeUnitBreakdown(code, computing){
   computing = computing || new Set();
   if(unitMemo[code]) return unitMemo[code];
-  if(computing.has(code)) return emptyBreakdown(); // guarda contra ciclo
+  if(computing.has(code)) return emptyBreakdown();
   computing.add(code);
-
   const result = emptyBreakdown();
   const kids = DB.children[code] || [];
   for(const [tflag, childCode, coef] of kids){
     const item = DB.items[childCode];
     const desc = item ? item[0] : ('#'+childCode);
     const unit = item ? item[1] : '';
-
-    // Mão de obra (H) e equipamento (CHP/CHI) são sempre terminais: mesmo que a
-    // base SINAPI guarde por baixo o detalhamento de encargos sociais
-    // (ferramentas, EPI, alimentação etc, também em "H"), isso não deve virar
-    // "funções" extras. Só sub-composições de MATERIAL são decompostas.
-    if(desc && normalize(desc).startsWith('curso de capacita')){
-      continue; // treinamento/curso, não é hora produtiva de execução
-    }
-    if(unit==='H'){
-      addTo(result.roles, childCode, desc, unit, coef);
-      continue;
-    }
-    if(unit==='CHP' || unit==='CHI'){
-      addTo(result.equip, childCode, desc, unit, coef);
-      continue;
-    }
+    if(desc && normalize(desc).startsWith('curso de capacita')){ continue; }
+    if(unit==='H'){ addTo(result.roles, childCode, desc, unit, coef); continue; }
+    if(unit==='CHP' || unit==='CHI'){ addTo(result.equip, childCode, desc, unit, coef); continue; }
     const hasChildren = DB.children[childCode] && DB.children[childCode].length>0;
     if(hasChildren){
       const sub = computeUnitBreakdown(childCode, computing);
@@ -206,43 +199,28 @@ function computeUnitBreakdown(code, computing){
   unitMemo[code] = result;
   return result;
 }
-
 function expandActivity(code, qty){
   const unit = computeUnitBreakdown(code);
   const out = emptyBreakdown();
   mergeScaled(out, unit, qty);
   return out;
 }
-
-/* Preço (R$, Piauí) de um item da base — 3º elemento do array em DB.items[code] */
 function priceOf(code){
   const item = DB.items[code];
   if(!item || item.length<3) return null;
   return (item[2]===undefined) ? null : item[2];
 }
-
-/* Dado um código de composição, retorna {mdo, mat, equip, semPreco} em R$ POR UNIDADE,
-   somando os leaves (mão de obra, material, equipamento) pelos preços da base SINAPI (PI). */
 function priceBreakdownUnit(code){
   const b = computeUnitBreakdown(code);
   let mdo=0, mat=0, equip=0, semPreco=false;
-  for(const c in b.roles){
-    const p = priceOf(c);
-    if(p===null) semPreco = true; else mdo += p * b.roles[c].qty;
-  }
-  for(const c in b.materials){
-    const p = priceOf(c);
-    if(p===null) semPreco = true; else mat += p * b.materials[c].qty;
-  }
-  for(const c in b.equip){
-    const p = priceOf(c);
-    if(p===null) semPreco = true; else equip += p * b.equip[c].qty;
-  }
+  for(const c in b.roles){ const p=priceOf(c); if(p===null) semPreco=true; else mdo+=p*b.roles[c].qty; }
+  for(const c in b.materials){ const p=priceOf(c); if(p===null) semPreco=true; else mat+=p*b.materials[c].qty; }
+  for(const c in b.equip){ const p=priceOf(c); if(p===null) semPreco=true; else equip+=p*b.equip[c].qty; }
   return {mdo, mat, equip, semPreco};
 }
 
 /* ============================================================
-   3. CALENDÁRIO — feriados e jornada
+   3. CALENDÁRIO
    ============================================================ */
 function easterDate(year){
   const a=year%19, b=Math.floor(year/100), c=year%100;
@@ -253,7 +231,6 @@ function easterDate(year){
   const month=Math.floor((h+l-7*m+114)/31), day=((h+l-7*m+114)%31)+1;
   return new Date(year, month-1, day);
 }
-
 function generateHolidays(year){
   const easter = easterDate(year);
   const list = [
@@ -276,26 +253,17 @@ function generateHolidays(year){
   ];
   return list.map(([d,name,sphere])=>({date:toISO(d), name, sphere, enabled:true}));
 }
-
 function defaultCalendar(){
   return {
     start: toISO(new Date()),
     weekdays: [
-      {enabled:false, hours:0},  // domingo
-      {enabled:true,  hours:8},  // segunda
-      {enabled:true,  hours:8},  // terça
-      {enabled:true,  hours:8},  // quarta
-      {enabled:true,  hours:8},  // quinta
-      {enabled:true,  hours:8},  // sexta
-      {enabled:true,  hours:4},  // sábado
+      {enabled:false, hours:0},{enabled:true,hours:8},{enabled:true,hours:8},{enabled:true,hours:8},
+      {enabled:true,hours:8},{enabled:true,hours:8},{enabled:true,hours:4},
     ],
     holidays: generateHolidays(new Date().getFullYear()).concat(generateHolidays(new Date().getFullYear()+1))
   };
 }
-
-function isHoliday(dateISO){
-  return calendar.holidays.some(h=>h.enabled && h.date===dateISO);
-}
+function isHoliday(dateISO){ return calendar.holidays.some(h=>h.enabled && h.date===dateISO); }
 function isWorkday(date){
   const dow = date.getDay();
   const wd = calendar.weekdays[dow];
@@ -303,29 +271,16 @@ function isWorkday(date){
   if(isHoliday(toISO(date))) return false;
   return true;
 }
-function hoursOnDate(date){
-  if(!isWorkday(date)) return 0;
-  return calendar.weekdays[date.getDay()].hours;
-}
-function nextWorkday(date){
-  let d = new Date(date);
-  while(!isWorkday(d)) d = addDays(d,1);
-  return d;
-}
+function hoursOnDate(date){ if(!isWorkday(date)) return 0; return calendar.weekdays[date.getDay()].hours; }
+function nextWorkday(date){ let d=new Date(date); while(!isWorkday(d)) d=addDays(d,1); return d; }
 function addWorkdaysSigned(date, n){
   let d = new Date(date);
   if(n===0) return d;
   const step = n>0?1:-1;
   let count = 0;
-  while(count < Math.abs(n)){
-    d = addDays(d, step);
-    if(isWorkday(d)) count++;
-  }
+  while(count < Math.abs(n)){ d = addDays(d, step); if(isWorkday(d)) count++; }
   return d;
 }
-
-/* Simula a execução de uma atividade a partir de earliestStart, respeitando
-   o calendário, e retorna {start, end, days} */
 function simulateActivity(earliestStart, roleHours){
   const remaining = {};
   let hasWork = false;
@@ -335,9 +290,7 @@ function simulateActivity(earliestStart, roleHours){
   }
   let cur = nextWorkday(earliestStart);
   const start = new Date(cur);
-  if(!hasWork){
-    return {start, end: start, days:1};
-  }
+  if(!hasWork) return {start, end: start, days:1};
   let lastWorked = new Date(cur);
   let guard = 0;
   while(true){
@@ -360,7 +313,7 @@ function simulateActivity(earliestStart, roleHours){
 }
 
 /* ============================================================
-   4. PREDECESSORAS — parsing
+   4. PREDECESSORAS
    ============================================================ */
 function parsePreds(text){
   if(!text) return [];
@@ -372,36 +325,72 @@ function parsePreds(text){
 }
 
 /* ============================================================
-   5. ORÇAMENTO — criação/edição de linhas
+   5. ORÇAMENTO — criação/edição/hierarquia de linhas
    ============================================================ */
 function newOrcRow(level){
   return {
     id: nextOrcId++,
-    level, // 'item' | 'subitem'
-    nome: level==='item' ? 'Novo item' : 'Novo subitem',
-    quant: level==='subitem' ? 1 : null,
+    level, // 'item' | 'subitem_principal' | 'subitem'
+    nome: level==='item' ? 'Novo item' : level==='subitem_principal' ? 'Novo subitem principal' : 'Novo subitem',
+    quant: level==='subitem' ? 0 : null,
     unidade: '',
     sinapiCode: '',
-    mdo: 0, taxaMdo: 0,
-    mat: 0, taxaMat: 0,
-    equip: 0, taxaEquipPct: 0,
+    mdo: 0, taxaMdo: 0, mat: 0, taxaMat: 0, equip: 0, taxaEquipPct: 0,
     semPreco: false,
     predText: '', roleAssign: {}, expanded: false,
   };
 }
 
-async function addOrcRow(){
-  const level = await showModal(
-    'Nova linha do orçamento',
-    'Essa linha é um <b>Item</b> (grupo/etapa, ex: "MURO") ou um <b>Subitem</b> (serviço com quantidade e custo, ex: "Retirada de tapume")?',
-    [
-      {label:'Item', value:'item'},
-      {label:'Subitem', value:'subitem', primary:true},
-      {label:'Cancelar', value:null},
-    ]
-  );
+/* Acha o índice (exclusivo) onde termina o grupo que começa em startIndex.
+   Item: vai até o próximo Item. Subitem principal: vai até o próximo
+   subitem_principal ou item (ou seja, até o fim dos seus subitens filhos). */
+function findGroupEnd(startIndex){
+  const level = orcamento[startIndex].level;
+  let i = startIndex+1;
+  if(level==='item'){
+    while(i<orcamento.length && orcamento[i].level!=='item') i++;
+  } else if(level==='subitem_principal'){
+    while(i<orcamento.length && orcamento[i].level==='subitem') i++;
+  }
+  return i;
+}
+
+const NIVEL_MODAL_BUTTONS = [
+  {label:'Item', value:'item'},
+  {label:'Subitem principal', value:'subitem_principal'},
+  {label:'Subitem', value:'subitem', primary:true},
+  {label:'Cancelar', value:null},
+];
+const NIVEL_MODAL_MSG = 'Essa linha é um <b>Item</b> (grupo/etapa, ex: "MURO"), um <b>Subitem principal</b> (agrupador dentro do item, ex: "2.1 Fundação" reunindo vários subitens) ou um <b>Subitem</b> (serviço com quantidade e custo)?';
+
+async function addOrcRowGlobal(){
+  const level = await showModal('Nova linha do orçamento', NIVEL_MODAL_MSG, NIVEL_MODAL_BUTTONS);
   if(!level) return;
-  orcamento.push(newOrcRow(level));
+  const row = newOrcRow(level);
+  orcamento.push(row);
+  pendingFocusId = row.id;
+  recalcAll();
+}
+
+async function addOrcRowInGroup(anchorId){
+  const level = await showModal('Nova linha do orçamento', NIVEL_MODAL_MSG, NIVEL_MODAL_BUTTONS);
+  if(!level) return;
+  const idx = orcamento.findIndex(r=>r.id===anchorId);
+  if(idx===-1) return;
+  const endIdx = findGroupEnd(idx);
+  const row = newOrcRow(level);
+  orcamento.splice(endIdx, 0, row);
+  pendingFocusId = row.id;
+  recalcAll();
+}
+
+function addSubitemUnderPrincipal(principalId){
+  const idx = orcamento.findIndex(r=>r.id===principalId);
+  if(idx===-1) return;
+  const endIdx = findGroupEnd(idx);
+  const row = newOrcRow('subitem');
+  orcamento.splice(endIdx, 0, row);
+  pendingFocusId = row.id;
   recalcAll();
 }
 
@@ -411,7 +400,7 @@ async function loadEapPadraoIntoOrcamento(){
     id: nextOrcId++,
     level,
     nome,
-    quant: level==='subitem' ? 1 : null,
+    quant: level==='subitem' ? 0 : null,
     unidade: '',
     sinapiCode: code || '',
     mdo:0, taxaMdo:0, mat:0, taxaMat:0, equip:0, taxaEquipPct:0, semPreco:false,
@@ -432,25 +421,26 @@ function applySinapiPricing(row){
 }
 
 /* ============================================================
-   6. RECÁLCULO GERAL — numeração, custos, físico e cronograma
+   6. RECÁLCULO GERAL
    ============================================================ */
 function recalcAll(){
-  // 1) numeração do orçamento (itens e subitens) + sequência de agendamento
-  let itemSeq = 0, subSeq = 0, seq = 0;
+  let itemSeq=0, subSeq=0, subSubSeq=0, seq=0, curPrincipal=null;
   orcamento.forEach(r=>{
     if(r.level==='item'){
-      itemSeq++; subSeq=0;
+      itemSeq++; subSeq=0; curPrincipal=null;
       r.numero = String(itemSeq);
-    } else {
-      subSeq++; seq++;
+    } else if(r.level==='subitem_principal'){
+      subSeq++; subSubSeq=0; curPrincipal=r;
       r.numero = `${itemSeq}.${subSeq}`;
-      r.seq = seq;
+    } else {
+      r.underPrincipal = !!curPrincipal;
+      if(curPrincipal){ subSubSeq++; r.numero = `${itemSeq}.${subSeq}.${subSubSeq}`; }
+      else { subSeq++; r.numero = `${itemSeq}.${subSeq}`; }
+      seq++; r.seq = seq;
     }
   });
 
   const subitens = orcamento.filter(r=>r.level==='subitem');
-
-  // 2) expandir cada subitem: físico (p/ cronograma e recursos) + custo (p/ orçamento)
   subitens.forEach(r=>{
     const code = parseInt(r.sinapiCode,10);
     if(code && DB.items[code]){
@@ -462,47 +452,44 @@ function recalcAll(){
       r.breakdown = emptyBreakdown();
     }
     r.roleAssign = r.roleAssign || {};
-    for(const c in r.breakdown.roles){
-      if(!(c in r.roleAssign)) r.roleAssign[c] = 1;
-    }
+    for(const c in r.breakdown.roles){ if(!(c in r.roleAssign)) r.roleAssign[c] = 1; }
 
     const qty = r.quant||0;
     const totalMdoUnit = (r.mdo||0) + (r.taxaMdo||0);
     const totalMatUnit = (r.mat||0) + (r.taxaMat||0);
     const totalEquipUnit = (r.equip||0) * (1 + (r.taxaEquipPct||0)/100);
     const totalSemBdiUnit = totalMdoUnit + totalMatUnit + totalEquipUnit;
-    r.totalMdoUnit = totalMdoUnit;
-    r.totalMatUnit = totalMatUnit;
-    r.totalEquipUnit = totalEquipUnit;
-    r.totalSemBdiUnit = totalSemBdiUnit;
-    r.totalMdoSemBdi = totalMdoUnit*qty;
-    r.totalMatSemBdi = totalMatUnit*qty;
-    r.totalEquipSemBdi = totalEquipUnit*qty;
-    r.totalSemBdi = totalSemBdiUnit*qty;
-    r.valorUnit = totalSemBdiUnit*(1+(bdiPercent||0)/100);
-    r.valorTotal = r.valorUnit*qty;
+    r.totalMdoUnit=totalMdoUnit; r.totalMatUnit=totalMatUnit; r.totalEquipUnit=totalEquipUnit;
+    r.totalSemBdiUnit=totalSemBdiUnit;
+    r.totalMdoSemBdi=totalMdoUnit*qty; r.totalMatSemBdi=totalMatUnit*qty; r.totalEquipSemBdi=totalEquipUnit*qty;
+    r.totalSemBdi=totalSemBdiUnit*qty;
+    r.valorUnit=totalSemBdiUnit*(1+(bdiPercent||0)/100);
+    r.valorTotal=r.valorUnit*qty;
   });
 
-  // 3) rollup dos itens (soma dos subitens até o próximo item) + total geral
-  let curItem = null, grandTotal = 0;
+  let curItem=null, curPrincipal2=null, grandTotal=0;
   orcamento.forEach(r=>{
     if(r.level==='item'){
-      curItem = r;
-      curItem.totalMdoSemBdi=0; curItem.totalMatSemBdi=0; curItem.totalEquipSemBdi=0;
-      curItem.totalSemBdi=0; curItem.valorTotal=0;
-    } else if(curItem){
-      curItem.totalMdoSemBdi += r.totalMdoSemBdi;
-      curItem.totalMatSemBdi += r.totalMatSemBdi;
-      curItem.totalEquipSemBdi += r.totalEquipSemBdi;
-      curItem.totalSemBdi += r.totalSemBdi;
-      curItem.valorTotal += r.valorTotal;
+      curItem=r; curPrincipal2=null;
+      r.totalMdoSemBdi=0; r.totalMatSemBdi=0; r.totalEquipSemBdi=0; r.totalSemBdi=0; r.valorTotal=0;
+    } else if(r.level==='subitem_principal'){
+      curPrincipal2=r;
+      r.totalMdoSemBdi=0; r.totalMatSemBdi=0; r.totalEquipSemBdi=0; r.totalSemBdi=0; r.valorTotal=0;
+    } else {
+      if(curItem){
+        curItem.totalMdoSemBdi+=r.totalMdoSemBdi; curItem.totalMatSemBdi+=r.totalMatSemBdi;
+        curItem.totalEquipSemBdi+=r.totalEquipSemBdi; curItem.totalSemBdi+=r.totalSemBdi; curItem.valorTotal+=r.valorTotal;
+      }
+      if(curPrincipal2){
+        curPrincipal2.totalMdoSemBdi+=r.totalMdoSemBdi; curPrincipal2.totalMatSemBdi+=r.totalMatSemBdi;
+        curPrincipal2.totalEquipSemBdi+=r.totalEquipSemBdi; curPrincipal2.totalSemBdi+=r.totalSemBdi; curPrincipal2.valorTotal+=r.valorTotal;
+      }
       grandTotal += r.valorTotal;
     }
   });
   orcamento.forEach(r=>{ r.incidencia = grandTotal>0 ? (r.valorTotal/grandTotal*100) : 0; });
   window._orcGrandTotal = grandTotal;
 
-  // 4) agendamento (predecessoras + calendário) — só entre subitens
   const bySeq = {};
   subitens.forEach(r=>{ bySeq[r.seq]=r; r.preds = parsePreds(r.predText); r.scheduled=false; });
   const projStart = parseISO(calendar.start);
@@ -522,9 +509,7 @@ function recalcAll(){
       }
       if(!ready) continue;
       const roleHours = {};
-      for(const c in act.breakdown.roles){
-        roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 };
-      }
+      for(const c in act.breakdown.roles){ roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 }; }
       const sim = simulateActivity(earliest, roleHours);
       act.start = sim.start; act.end = sim.end; act.durationDays = sim.days;
       act.scheduled = true; progress = true;
@@ -533,14 +518,10 @@ function recalcAll(){
   subitens.forEach(act=>{
     if(!act.scheduled){
       const roleHours = {};
-      for(const c in act.breakdown.roles){
-        roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 };
-      }
+      for(const c in act.breakdown.roles){ roleHours[c] = { hoursNeeded: act.breakdown.roles[c].qty, qtyWorkers: act.roleAssign[c]||1 }; }
       const sim = simulateActivity(projStart, roleHours);
       act.start=sim.start; act.end=sim.end; act.durationDays=sim.days; act.cyclic=true;
-    } else {
-      act.cyclic=false;
-    }
+    } else act.cyclic=false;
   });
 
   renderAll();
@@ -554,7 +535,7 @@ function renderAll(){
   renderRecursos();
   renderStats();
   renderGantt();
-  renderDashboard();
+  renderDashboardAll();
 }
 
 /* ============================================================
@@ -583,47 +564,74 @@ function renderOrcStats(){
   `;
 }
 
+function orcRowHtml(r){
+  if(r.level==='item'){
+    return `<tr class="tr-orc-item" data-orc="${r.id}" draggable="true">
+      <td><button class="icon-btn drag" title="Arrastar para reordenar">⠿</button></td>
+      <td>${r.numero}</td>
+      <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+      <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+      <td class="orc-actions">
+        <button class="icon-btn add" data-orcadd="${r.id}" title="Adicionar linha neste item">+</button>
+        <button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button>
+      </td>
+    </tr>`;
+  }
+  if(r.level==='subitem_principal'){
+    return `<tr class="tr-orc-principal" data-orc="${r.id}" draggable="true">
+      <td><button class="icon-btn drag" title="Arrastar para reordenar">⠿</button></td>
+      <td>${r.numero}</td>
+      <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;padding-left:14px;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+      <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+      <td class="orc-actions">
+        <button class="icon-btn add" data-orcaddchild="${r.id}" title="Adicionar subitem aqui">+</button>
+        <button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button>
+      </td>
+    </tr>`;
+  }
+  const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
+  return `<tr class="tr-orc-subitem${r.underPrincipal?' indent':''}" data-orc="${r.id}" draggable="true">
+    <td><button class="icon-btn drag" title="Arrastar para reordenar">⠿</button></td>
+    <td>${r.numero}</td>
+    <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
+    <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
+    <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
+    <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${semPrecoBadge}</td>
+    <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
+    <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
+    <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
+    <td class="num"><input type="number" class="cell small" data-orcf="taxaMat" data-orc="${r.id}" value="${fmtInput(r.taxaMat)}" step="0.01"></td>
+    <td class="num"><input type="number" class="cell small" data-orcf="equip" data-orc="${r.id}" value="${fmtInput(r.equip)}" step="0.01"></td>
+    <td class="num"><input type="number" class="cell small" data-orcf="taxaEquipPct" data-orc="${r.id}" value="${fmtInput(r.taxaEquipPct)}" step="0.1"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalSemBdiUnit,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMdoSemBdi,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMatSemBdi,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalEquipSemBdi,2)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.totalSemBdi,2)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
+    <td class="orc-actions"><button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+
 function renderOrcamento(){
   const tbody = document.getElementById('tbodyOrcamento');
   document.getElementById('cOrc').textContent = orcamento.length;
   document.getElementById('emptyOrcamento').style.display = orcamento.length ? 'none':'block';
 
-  tbody.innerHTML = orcamento.map(r=>{
-    if(r.level==='item'){
-      return `<tr class="tr-orc-item" data-orc="${r.id}">
-        <td>${r.numero}</td>
-        <td colspan="16"><input type="text" class="cell" style="background:transparent;border:none;font-weight:600;" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
-        <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
-        <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
-        <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
-      </tr>`;
-    }
-    const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
-    return `<tr class="tr-orc-subitem" data-orc="${r.id}">
-      <td>${r.numero}</td>
-      <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
-      <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
-      <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
-      <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${semPrecoBadge}</td>
-      <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaMat" data-orc="${r.id}" value="${fmtInput(r.taxaMat)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="equip" data-orc="${r.id}" value="${fmtInput(r.equip)}" step="0.01"></td>
-      <td class="num"><input type="number" class="cell small" data-orcf="taxaEquipPct" data-orc="${r.id}" value="${fmtInput(r.taxaEquipPct)}" step="0.1"></td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalSemBdiUnit,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMdoSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalMatSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.totalEquipSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.totalSemBdi,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
-      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
-      <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
-      <td><button class="icon-btn" data-orcremove="${r.id}">✕</button></td>
-    </tr>`;
-  }).join('');
+  tbody.innerHTML = orcamento.map(orcRowHtml).join('');
 
   bindOrcamentoEvents();
+  bindOrcDragEvents();
+
+  if(pendingFocusId){
+    const inp = tbody.querySelector(`input[data-orcf="nome"][data-orc="${pendingFocusId}"]`);
+    if(inp){ inp.focus(); inp.select(); }
+    pendingFocusId = null;
+  }
 }
 
 function bindOrcamentoEvents(){
@@ -642,24 +650,76 @@ function bindOrcamentoEvents(){
       if(f==='nome') row.nome = inp.value;
       else if(f==='unidade') row.unidade = inp.value;
       else if(f==='quant') row.quant = parseFloat(inp.value)||0;
-      else if(f==='sinapiCode'){
-        row.sinapiCode = inp.value.trim();
-        applySinapiPricing(row);
-      }
+      else if(f==='sinapiCode'){ row.sinapiCode = inp.value.trim(); applySinapiPricing(row); }
       else row[f] = parseFloat(inp.value)||0;
       recalcAll();
     });
   });
   document.querySelectorAll('[data-orcremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      orcamento = orcamento.filter(r=>r.id!=btn.dataset.orcremove);
+      const id = +btn.dataset.orcremove;
+      const idx = orcamento.findIndex(r=>r.id===id);
+      if(idx===-1) return;
+      const row = orcamento[idx];
+      if(row.level==='item' || row.level==='subitem_principal'){
+        const endIdx = findGroupEnd(idx);
+        const n = endIdx - idx;
+        if(n>1 && !confirm(`Isso remove "${row.nome}" e as ${n-1} linha(s) dentro dele. Continuar?`)) return;
+        orcamento.splice(idx, n);
+      } else {
+        orcamento.splice(idx, 1);
+      }
       recalcAll();
+    });
+  });
+  document.querySelectorAll('[data-orcadd]').forEach(btn=>{
+    btn.addEventListener('click', ()=> addOrcRowInGroup(+btn.dataset.orcadd));
+  });
+  document.querySelectorAll('[data-orcaddchild]').forEach(btn=>{
+    btn.addEventListener('click', ()=> addSubitemUnderPrincipal(+btn.dataset.orcaddchild));
+  });
+}
+
+/* Bloco de linhas que se move junto ao arrastar startIndex */
+function computeDragBlock(startIndex){
+  const end = findGroupEnd(startIndex);
+  return orcamento.slice(startIndex, end).map(r=>r.id);
+}
+
+function bindOrcDragEvents(){
+  const tbody = document.getElementById('tbodyOrcamento');
+  tbody.querySelectorAll('tr[draggable="true"]').forEach(tr=>{
+    tr.addEventListener('dragstart', (e)=>{
+      const id = +tr.dataset.orc;
+      const idx = orcamento.findIndex(r=>r.id===id);
+      if(idx===-1) return;
+      dragBlockIds = computeDragBlock(idx);
+      e.dataTransfer.effectAllowed = 'move';
+      try{ e.dataTransfer.setData('text/plain', String(id)); }catch(err){}
+    });
+    tr.addEventListener('dragover', (e)=>{ e.preventDefault(); tr.classList.add('drag-over'); });
+    tr.addEventListener('dragleave', ()=> tr.classList.remove('drag-over'));
+    tr.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      tr.classList.remove('drag-over');
+      if(!dragBlockIds) return;
+      const targetId = +tr.dataset.orc;
+      if(dragBlockIds.includes(targetId)){ dragBlockIds=null; return; }
+      const block = orcamento.filter(r=>dragBlockIds.includes(r.id));
+      orcamento = orcamento.filter(r=>!dragBlockIds.includes(r.id));
+      const targetIdx = orcamento.findIndex(r=>r.id===targetId);
+      dragBlockIds = null;
+      if(targetIdx===-1) return;
+      orcamento.splice(targetIdx, 0, ...block);
+      recalcAll();
+    });
+    tr.addEventListener('dragend', ()=>{
+      dragBlockIds = null;
+      tbody.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
     });
   });
 }
 
-/* Busca por código OU descrição SINAPI, com autocomplete — usado no campo
-   "SINAPI" do Orçamento (único lugar de digitação do código no sistema). */
 function setupCodeSearch(inp, onSelect){
   onSelect = onSelect || (()=>{});
   let acp = null;
@@ -693,7 +753,7 @@ function setupCodeSearch(inp, onSelect){
     acp.querySelectorAll('.acp-item[data-code]').forEach(item=>{
       item.addEventListener('mousedown', (ev)=>{
         ev.preventDefault();
-        inp.value = item.dataset.code; // só o código fica salvo — a descrição foi só pra achar
+        inp.value = item.dataset.code;
         close();
         onSelect();
       });
@@ -703,7 +763,7 @@ function setupCodeSearch(inp, onSelect){
 }
 
 /* ============================================================
-   8. RENDER — PLANEJAMENTO (ex-Atividades, agora derivado do Orçamento)
+   8. RENDER — PLANEJAMENTO
    ============================================================ */
 function fnLabel(desc){
   return (desc||'').replace(/ COM ENCARGOS COMPLEMENTARES.*$/i,'').replace(/\(HORISTA\)/i,'').trim();
@@ -731,7 +791,6 @@ function renderAtividades(){
       <td style="font-family:var(--mono);font-size:11.5px;">${fmtDate(act.end)}</td>
     `;
     tbody.appendChild(tr);
-
     if(act.expanded){
       const subTr = document.createElement('tr');
       subTr.className = 'row-sub';
@@ -742,7 +801,6 @@ function renderAtividades(){
       tbody.appendChild(subTr);
     }
   });
-
   bindActivityEvents();
 }
 
@@ -770,7 +828,7 @@ function buildRoleEditor(act){
   });
   wrap.innerHTML = `
     <div style="max-width:640px;">
-      <div class="hint" style="margin-bottom:8px;">Ajuste a quantidade de trabalhadores por função — a duração da atividade recalcula automaticamente (usa a função que demorar mais como gargalo).</div>
+      <div class="hint" style="margin-bottom:8px;">Ajuste a quantidade de trabalhadores por função — a duração recalcula automaticamente.</div>
       <table>
         <thead><tr><th>Função</th><th class="num">Horas necessárias</th><th class="num">Qtd. trabalhadores</th><th class="num">Dias (isolado)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -805,7 +863,7 @@ function bindActivityEvents(){
 }
 
 /* ============================================================
-   9. RENDER — RECURSOS CONSOLIDADOS
+   9. RENDER — RECURSOS
    ============================================================ */
 function renderRecursos(){
   const subitens = orcamento.filter(r=>r.level==='subitem');
@@ -816,16 +874,12 @@ function renderRecursos(){
     for(const c in act.breakdown.materials){ addTo(matTotals, c, act.breakdown.materials[c].desc, act.breakdown.materials[c].unit, act.breakdown.materials[c].qty); }
     for(const c in act.breakdown.equip){ addTo(equipTotals, c, act.breakdown.equip[c].desc, act.breakdown.equip[c].unit, act.breakdown.equip[c].qty); }
   });
-
   fillSimpleTable('#tblMaoObra tbody', Object.values(roleTotals).sort((a,b)=>b.qty-a.qty), r=>`
     <tr><td>${fnLabel(r.desc)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,1)}</td><td class="num" style="font-family:var(--mono);color:var(--text-faint)">${fmtNum(r.qty/8,1)}</td></tr>`);
-
   fillSimpleTable('#tblMateriais tbody', Object.entries(matTotals).sort((a,b)=>b[1].qty-a[1].qty), ([code,r])=>`
     <tr><td class="code">${code}</td><td>${r.desc}</td><td>${r.unit}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)}</td></tr>`);
-
   fillSimpleTable('#tblEquipamentos tbody', Object.entries(equipTotals).sort((a,b)=>b[1].qty-a[1].qty), ([code,r])=>`
     <tr><td class="code">${code}</td><td>${r.desc}</td><td>${r.unit}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)}</td></tr>`);
-
   window._totals = {roleTotals, matTotals, equipTotals};
 }
 function fillSimpleTable(sel, arr, rowFn){
@@ -845,7 +899,6 @@ function renderStats(){
   const maxEnd = valid.length? new Date(Math.max(...valid.map(a=>a.end))) : null;
   const totalDays = (minStart&&maxEnd) ? Math.round((maxEnd-minStart)/86400000)+1 : 0;
   let totalRoleHours=0; subitens.forEach(a=>{ if(a.breakdown) for(const c in a.breakdown.roles) totalRoleHours+=a.breakdown.roles[c].qty; });
-
   strip.innerHTML = `
     <div class="stat accent"><div class="lbl">Duração total</div><div class="val">${totalDays}<span class="unit">dias corridos</span></div></div>
     <div class="stat"><div class="lbl">Início</div><div class="val" style="font-size:16px;">${fmtDate(minStart)}</div></div>
@@ -855,55 +908,102 @@ function renderStats(){
   `;
 }
 
-function renderGantt(){
-  const wrap = document.getElementById('ganttWrap');
-  const subitens = orcamento.filter(r=>r.level==='subitem');
-  const valid = subitens.filter(a=>a.start && a.end);
-  if(valid.length===0){
-    wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>';
-    return;
-  }
-  const minStart = new Date(Math.min(...valid.map(a=>a.start)));
-  const maxEnd = new Date(Math.max(...valid.map(a=>a.end)));
+function ganttSvgFor(rows, todayLine){
+  const minStart = new Date(Math.min(...rows.map(r=>r.start)));
+  const maxEnd = new Date(Math.max(...rows.map(r=>r.end)));
   const totalDays = Math.max(1, Math.round((maxEnd-minStart)/86400000)+1);
   const dayW = totalDays>90 ? 8 : totalDays>45 ? 14 : 24;
   const rowH = 26;
-  const labelW = 260;
+  const labelW = 280;
   const chartW = totalDays*dayW;
-  const chartH = valid.length*rowH + 30;
+  const chartH = rows.length*rowH + 30;
   const today = new Date(); today.setHours(0,0,0,0);
 
   let svg = `<svg width="${labelW+chartW}" height="${chartH}" style="display:block;font-family:var(--mono);">`;
-
   for(let i=0;i<totalDays;i++){
     const d = addDays(minStart,i);
     const x = labelW + i*dayW;
-    if(!isWorkday(d)){
-      svg += `<rect x="${x}" y="0" width="${dayW}" height="${chartH}" fill="url(#hatch)" opacity="0.5"/>`;
-    }
+    if(!isWorkday(d)) svg += `<rect x="${x}" y="0" width="${dayW}" height="${chartH}" fill="url(#hatch)" opacity="0.5"/>`;
     if(d.getDate()===1){
       svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#333c47" stroke-width="1"/>`;
       svg += `<text x="${x+3}" y="12" fill="#8a94a1" font-size="9">${d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'})}</text>`;
     }
   }
   svg += `<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#1a1f26"/><line x1="0" y1="0" x2="0" y2="6" stroke="#2b333e" stroke-width="3"/></pattern></defs>`;
-
-  if(today>=minStart && today<=maxEnd){
+  if(todayLine && today>=minStart && today<=maxEnd){
     const x = labelW + Math.round((today-minStart)/86400000)*dayW;
     svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#d9695b" stroke-width="1.5" stroke-dasharray="3,2"/>`;
   }
-
-  valid.forEach((act,i)=>{
+  rows.forEach((row,i)=>{
     const y = 30 + i*rowH;
-    const x = labelW + Math.round((act.start-minStart)/86400000)*dayW;
-    const w = Math.max(dayW*0.6, Math.round((act.end-act.start)/86400000+1)*dayW - 2);
-    const late = act.end < today ? 'var(--red)' : 'var(--accent)';
-    svg += `<text x="8" y="${y+15}" fill="#c7cdd4" font-size="11" font-family="Inter, sans-serif">${escapeXml(act.seq+'. '+truncate(act.nome||act.sinapiCode||'—',30))}</text>`;
-    svg += `<rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${late}" opacity="0.9"><title>${escapeXml((act.nome||act.sinapiCode)+' · '+fmtDate(act.start)+' a '+fmtDate(act.end))}</title></rect>`;
+    const x = labelW + Math.round((row.start-minStart)/86400000)*dayW;
+    const w = Math.max(dayW*0.6, Math.round((row.end-row.start)/86400000+1)*dayW - 2);
+    const barColor = row.isItem ? '#e8a33d' : (row.end<today ? 'var(--red)' : '#5b9dd9');
+    const labelIndent = row.indent ? 16 : 0;
+    const cursorAttr = row.clickable ? ` style="cursor:pointer;" data-toggle-item="${row.toggleId}"` : '';
+    svg += `<g${cursorAttr}><rect x="0" y="${y}" width="${labelW+chartW}" height="${rowH}" fill="transparent"/>
+      <text x="${8+labelIndent}" y="${y+15}" fill="${row.isItem?'#e7ebef':'#c7cdd4'}" font-size="11" font-family="Inter, sans-serif" font-weight="${row.isItem?600:400}">${row.clickable?(row.expanded?'▾ ':'▸ '):''}${escapeXml(row.label)}</text>
+      <rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${barColor}" opacity="0.9"><title>${escapeXml(row.label+' · '+fmtDate(row.start)+' a '+fmtDate(row.end))}</title></rect>
+    </g>`;
   });
-
   svg += `</svg>`;
-  wrap.innerHTML = svg;
+  return svg;
+}
+
+function renderGantt(){
+  const wrap = document.getElementById('ganttWrap');
+  if(ganttLevel==='subitem'){
+    const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.end);
+    if(subitens.length===0){ wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
+    const rows = subitens.map(act=>({start:act.start, end:act.end, label:`${act.seq}. ${truncate(act.nome||act.sinapiCode||'—',34)}`, isItem:false}));
+    wrap.innerHTML = ganttSvgFor(rows, true);
+    return;
+  }
+  // nível item: agrupa por item, com expand/collapse
+  const groups = [];
+  let curGroup = null;
+  orcamento.forEach(r=>{
+    if(r.level==='item'){ curGroup = {item:r, children:[]}; groups.push(curGroup); }
+    else if(r.level==='subitem' && curGroup) curGroup.children.push(r);
+  });
+  const rows = [];
+  groups.forEach(g=>{
+    const scheduled = g.children.filter(c=>c.start && c.end);
+    if(scheduled.length===0) return;
+    const start = new Date(Math.min(...scheduled.map(c=>c.start)));
+    const end = new Date(Math.max(...scheduled.map(c=>c.end)));
+    rows.push({start, end, label:`${g.item.numero} ${truncate(g.item.nome,32)}`, isItem:true, clickable:true, toggleId:g.item.id, expanded:!!g.item.ganttExpanded});
+    if(g.item.ganttExpanded){
+      scheduled.forEach(c=>{
+        rows.push({start:c.start, end:c.end, label:`${c.seq}. ${truncate(c.nome||c.sinapiCode||'—',30)}`, isItem:false, indent:true});
+      });
+    }
+  });
+  if(rows.length===0){ wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
+  wrap.innerHTML = ganttSvgFor(rows, true);
+  wrap.querySelectorAll('[data-toggle-item]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = +el.dataset.toggleItem;
+      const item = orcamento.find(r=>r.id===id);
+      if(item) item.ganttExpanded = !item.ganttExpanded;
+      renderGantt();
+    });
+  });
+}
+
+function setupGanttToggle(){
+  document.getElementById('btnGanttSubitens').addEventListener('click', ()=>{
+    ganttLevel='subitem';
+    document.getElementById('btnGanttSubitens').classList.add('active');
+    document.getElementById('btnGanttItens').classList.remove('active');
+    renderGantt();
+  });
+  document.getElementById('btnGanttItens').addEventListener('click', ()=>{
+    ganttLevel='item';
+    document.getElementById('btnGanttItens').classList.add('active');
+    document.getElementById('btnGanttSubitens').classList.remove('active');
+    renderGantt();
+  });
 }
 
 /* ============================================================
@@ -912,27 +1012,25 @@ function renderGantt(){
 function setupBdiTab(){
   const inp = document.getElementById('bdiPercent');
   inp.value = bdiPercent;
-  inp.addEventListener('change', ()=>{
-    bdiPercent = parseFloat(inp.value)||0;
-    recalcAll();
-  });
+  inp.addEventListener('change', ()=>{ bdiPercent = parseFloat(inp.value)||0; recalcAll(); });
 }
 
 /* ============================================================
-   12. DASHBOARD — Curva ABC
+   12. DASHBOARD
    ============================================================ */
-function renderDashboard(){
+function renderDashboardAll(){
+  try{ renderDashboardAbc(); }catch(e){ console.error('Curva ABC:', e); }
+  try{ renderChartPorItem(); }catch(e){ console.error('Custo por item:', e); }
+  try{ renderFluxoCharts(); }catch(e){ console.error('Fluxo financeiro:', e); }
+}
+
+function renderDashboardAbc(){
   const canvas = document.getElementById('chartAbc');
   if(!canvas) return;
-  const rows = orcamento.filter(r=> r.level===abcLevel && (r.valorTotal||0) > 0)
-                         .sort((a,b)=> b.valorTotal - a.valorTotal);
-
+  if(typeof Chart==='undefined'){ document.getElementById('emptyDashboard').style.display='block'; document.getElementById('emptyDashboard').textContent='Biblioteca de gráficos não carregou (sem internet?).'; return; }
+  const rows = orcamento.filter(r=> r.level===abcLevel && (r.valorTotal||0) > 0).sort((a,b)=> b.valorTotal - a.valorTotal);
   document.getElementById('emptyDashboard').style.display = rows.length ? 'none' : 'block';
-  renderDashStats(rows);
-  if(rows.length===0){
-    if(abcChart){ abcChart.destroy(); abcChart=null; }
-    return;
-  }
+  if(rows.length===0){ if(abcChart){ abcChart.destroy(); abcChart=null; } return; }
 
   const total = rows.reduce((s,r)=>s+r.valorTotal,0);
   let acc = 0;
@@ -942,76 +1040,167 @@ function renderDashboard(){
   const barColors = cumPct.map(p=> p<=80 ? '#e8a33d' : p<=95 ? '#5b9dd9' : '#8a94a1');
 
   if(abcChart) abcChart.destroy();
-  const ctx = canvas.getContext('2d');
-  abcChart = new Chart(ctx, {
+  abcChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
     data: {
       labels,
       datasets: [
-        { type: 'bar', label: 'Valor (R$)', data: values, backgroundColor: barColors, yAxisID: 'y', order: 2 },
-        { type: 'line', label: 'Acumulado (%)', data: cumPct, borderColor: '#e7ebef', backgroundColor: '#e7ebef',
-          borderWidth: 1.5, pointRadius: 2, yAxisID: 'y1', order: 1, tension: 0.15 }
+        { type:'bar', label:'Valor (R$)', data:values, backgroundColor:barColors, yAxisID:'y', order:2 },
+        { type:'line', label:'Acumulado (%)', data:cumPct, borderColor:'#e7ebef', backgroundColor:'#e7ebef', borderWidth:1.5, pointRadius:2, yAxisID:'y1', order:1, tension:0.15 }
       ]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: {mode:'index', intersect:false},
+      responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
       scales: {
-        x: { ticks:{ color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:40 }, grid:{ color:'#232a33' } },
-        y: { position:'left', ticks:{ color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0) }, grid:{ color:'#232a33' }, title:{display:true,text:'Valor (R$)',color:'#b7c0cb'} },
-        y1:{ position:'right', min:0, max:100, ticks:{ color:'#b7c0cb', callback:v=>v+'%' }, grid:{ drawOnChartArea:false }, title:{display:true,text:'Acumulado (%)',color:'#b7c0cb'} },
+        x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:40}, grid:{color:'#232a33'} },
+        y:{ position:'left', ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'}, title:{display:true,text:'Valor (R$)',color:'#b7c0cb'} },
+        y1:{ position:'right', min:0, max:100, ticks:{color:'#b7c0cb', callback:v=>v+'%'}, grid:{drawOnChartArea:false}, title:{display:true,text:'Acumulado (%)',color:'#b7c0cb'} },
       },
       plugins: {
-        legend: { labels:{ color:'#e7ebef' } },
-        tooltip: {
-          callbacks: {
-            label: (ctx)=> ctx.dataset.type==='line'
-              ? `Acumulado: ${fmtNum(ctx.parsed.y,1)}%`
-              : `Valor: R$ ${fmtNum(ctx.parsed.y,2)}`
-          }
-        }
+        legend:{ labels:{color:'#e7ebef'} },
+        tooltip:{ callbacks:{ label:(ctx)=> ctx.dataset.type==='line' ? `Acumulado: ${fmtNum(ctx.parsed.y,1)}%` : `Valor: R$ ${fmtNum(ctx.parsed.y,2)}` } }
       }
     }
   });
-}
 
-function renderDashStats(rows){
+  const stripTotal = rows.reduce((s,r)=>s+r.valorTotal,0);
+  let acc2=0, classA=0, classB=0, classC=0;
+  rows.forEach(r=>{ acc2+=r.valorTotal; const p=stripTotal>0?acc2/stripTotal*100:0; if(p<=80)classA++; else if(p<=95)classB++; else classC++; });
   const strip = document.getElementById('dashStatsStrip');
-  if(!strip) return;
-  const total = rows.reduce((s,r)=>s+r.valorTotal,0);
-  let acc=0, classA=0, classB=0, classC=0;
-  rows.forEach(r=>{
-    acc += r.valorTotal;
-    const pct = total>0? acc/total*100 : 0;
-    if(pct<=80) classA++; else if(pct<=95) classB++; else classC++;
-  });
   strip.innerHTML = `
-    <div class="stat accent"><div class="lbl">Valor total (nível ${abcLevel==='item'?'itens':'subitens'})</div><div class="val" style="font-size:18px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat accent"><div class="lbl">Valor total (nível ${abcLevel==='item'?'itens':'subitens'})</div><div class="val" style="font-size:18px;">R$ ${fmtNum(stripTotal,2)}</div></div>
     <div class="stat"><div class="lbl">Classe A</div><div class="val">${classA}<span class="unit">linhas</span></div></div>
     <div class="stat"><div class="lbl">Classe B</div><div class="val">${classB}<span class="unit">linhas</span></div></div>
     <div class="stat"><div class="lbl">Classe C</div><div class="val">${classC}<span class="unit">linhas</span></div></div>
   `;
 }
 
+function renderChartPorItem(){
+  const canvas = document.getElementById('chartPorItem');
+  if(!canvas || typeof Chart==='undefined') return;
+  const items = orcamento.filter(r=>r.level==='item' && (r.valorTotal||0)>0).sort((a,b)=>b.valorTotal-a.valorTotal);
+  document.getElementById('emptyPorItem').style.display = items.length?'none':'block';
+  if(porItemChart){ porItemChart.destroy(); porItemChart=null; }
+  if(items.length===0) return;
+  porItemChart = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{
+      labels: items.map(r=>`${r.numero} ${truncate(r.nome,28)}`),
+      datasets:[{label:'Valor total (R$)', data:items.map(r=>r.valorTotal), backgroundColor:'#e8a33d'}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} },
+        y:{ ticks:{color:'#e7ebef', font:{size:11}}, grid:{display:false} },
+      },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>'R$ '+fmtNum(ctx.parsed.x,2) } } }
+    }
+  });
+}
+
+function periodKeyFor(date, periodType, projStart){
+  if(periodType==='mes') return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+  const days = periodType==='semana'?7:14;
+  const diff = Math.floor((date - projStart)/86400000);
+  return `B${Math.floor(diff/days)}`;
+}
+function periodLabelFor(key, periodType, projStart){
+  if(periodType==='mes'){
+    const [y,m] = key.split('-').map(Number);
+    return new Date(y, m-1, 1).toLocaleDateString('pt-BR',{month:'short',year:'2-digit'});
+  }
+  const days = periodType==='semana'?7:14;
+  const bucket = parseInt(key.slice(1),10);
+  const start = addDays(projStart, bucket*days);
+  return start.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+}
+function computeCashFlow(periodType){
+  const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.end);
+  if(subitens.length===0) return null;
+  const projStart = new Date(Math.min(...subitens.map(a=>a.start)));
+  const bdiMul = 1+(bdiPercent||0)/100;
+  const buckets = {};
+  subitens.forEach(act=>{
+    const workdays = [];
+    let d = new Date(act.start);
+    while(d<=act.end){ if(isWorkday(d)) workdays.push(new Date(d)); d = addDays(d,1); }
+    if(workdays.length===0) workdays.push(new Date(act.start));
+    const mdoTotal = (act.totalMdoSemBdi||0)*bdiMul;
+    const matTotal = (act.totalMatSemBdi||0)*bdiMul;
+    const outrosTotal = (act.totalEquipSemBdi||0)*bdiMul;
+    const n = workdays.length;
+    workdays.forEach(wd=>{
+      const key = periodKeyFor(wd, periodType, projStart);
+      if(!buckets[key]) buckets[key] = {mdo:0,mat:0,outros:0, sortDate:wd};
+      buckets[key].mdo += mdoTotal/n;
+      buckets[key].mat += matTotal/n;
+      buckets[key].outros += outrosTotal/n;
+      if(wd<buckets[key].sortDate) buckets[key].sortDate = wd;
+    });
+  });
+  const keys = Object.keys(buckets).sort((a,b)=> buckets[a].sortDate - buckets[b].sortDate);
+  return {
+    labels: keys.map(k=>periodLabelFor(k, periodType, projStart)),
+    mdo: keys.map(k=>buckets[k].mdo),
+    mat: keys.map(k=>buckets[k].mat),
+    outros: keys.map(k=>buckets[k].outros),
+  };
+}
+function renderFluxoCharts(){
+  const data = computeCashFlow(fluxoPeriod);
+  const emptyEl = document.getElementById('emptyFluxo');
+  if(emptyEl) emptyEl.style.display = data ? 'none' : 'block';
+  ['mdo','mat','outros'].forEach(cat=>{ if(fluxoCharts[cat]){ fluxoCharts[cat].destroy(); fluxoCharts[cat]=null; } });
+  if(!data || typeof Chart==='undefined') return;
+  const colors = {mdo:'#e8a33d', mat:'#5b9dd9', outros:'#a58bd9'};
+  const canvasIds = {mdo:'chartFluxoMdo', mat:'chartFluxoMat', outros:'chartFluxoOutros'};
+  ['mdo','mat','outros'].forEach(cat=>{
+    const canvas = document.getElementById(canvasIds[cat]);
+    if(!canvas) return;
+    fluxoCharts[cat] = new Chart(canvas.getContext('2d'), {
+      type:'bar',
+      data:{ labels:data.labels, datasets:[{label:'R$', data:data[cat], backgroundColor:colors[cat]}] },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        scales:{
+          x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:30}, grid:{color:'#232a33'} },
+          y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} },
+        },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>'R$ '+fmtNum(ctx.parsed.y,2) } } }
+      }
+    });
+  });
+}
+function setFluxoPeriod(p){
+  fluxoPeriod = p;
+  document.getElementById('btnPerSemana').classList.toggle('active', p==='semana');
+  document.getElementById('btnPerQuinzena').classList.toggle('active', p==='quinzena');
+  document.getElementById('btnPerMes').classList.toggle('active', p==='mes');
+  renderFluxoCharts();
+}
 function setupDashboardTab(){
   document.getElementById('btnAbcItens').addEventListener('click', ()=>{
     abcLevel='item';
     document.getElementById('btnAbcItens').classList.add('active');
     document.getElementById('btnAbcSubitens').classList.remove('active');
-    renderDashboard();
+    renderDashboardAbc();
   });
   document.getElementById('btnAbcSubitens').addEventListener('click', ()=>{
     abcLevel='subitem';
     document.getElementById('btnAbcSubitens').classList.add('active');
     document.getElementById('btnAbcItens').classList.remove('active');
-    renderDashboard();
+    renderDashboardAbc();
   });
+  document.getElementById('btnPerSemana').addEventListener('click', ()=>setFluxoPeriod('semana'));
+  document.getElementById('btnPerQuinzena').addEventListener('click', ()=>setFluxoPeriod('quinzena'));
+  document.getElementById('btnPerMes').addEventListener('click', ()=>setFluxoPeriod('mes'));
 }
 
 /* ============================================================
-   13. CRONOGRAMA — calendário embutido (dias úteis e feriados)
+   13. CRONOGRAMA — calendário embutido
    ============================================================ */
 const WEEKDAY_NAMES = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
-
 function renderCalendarTab(){
   const c = document.getElementById('weekdayConfig');
   c.innerHTML = calendar.weekdays.map((wd,i)=>`
@@ -1031,7 +1220,6 @@ function renderCalendarTab(){
   document.getElementById('projStart').value = calendar.start;
   renderHolidaysTable();
 }
-
 function renderHolidaysTable(){
   const tb = document.querySelector('#tblFeriados tbody');
   const sorted = [...calendar.holidays].sort((a,b)=>a.date.localeCompare(b.date));
@@ -1056,14 +1244,9 @@ function renderHolidaysTable(){
     });
   });
   tb.querySelectorAll('[data-hremove]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      calendar.holidays.splice(+btn.dataset.hremove,1);
-      renderHolidaysTable();
-      recalcAll();
-    });
+    btn.addEventListener('click', ()=>{ calendar.holidays.splice(+btn.dataset.hremove,1); renderHolidaysTable(); recalcAll(); });
   });
 }
-
 function setupCalendarTab(){
   document.getElementById('projStart').addEventListener('change', e=>{ calendar.start = e.target.value; recalcAll(); });
   document.getElementById('btnGenHolidays').addEventListener('click', ()=>{
@@ -1078,8 +1261,7 @@ function setupCalendarTab(){
   });
   document.getElementById('btnAddHoliday').addEventListener('click', ()=>{
     calendar.holidays.push({date: toISO(new Date()), name:'Novo feriado', sphere:'municipal', enabled:true});
-    renderHolidaysTable();
-    recalcAll();
+    renderHolidaysTable(); recalcAll();
   });
   document.getElementById('calToggle').addEventListener('click', ()=>{
     document.getElementById('calToggle').classList.toggle('open');
@@ -1088,7 +1270,7 @@ function setupCalendarTab(){
 }
 
 /* ============================================================
-   14. CONFIGURAÇÃO — dados da obra
+   14. CONFIGURAÇÃO
    ============================================================ */
 function collectConfig(){
   return {
@@ -1136,7 +1318,6 @@ function exportExcel(){
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cronoRows), 'Cronograma');
 
   const {roleTotals, matTotals, equipTotals} = window._totals || {roleTotals:{},matTotals:{},equipTotals:{}};
-
   const roleRows = [['Função','Horas totais','Homens-dia (8h)']];
   Object.values(roleTotals).forEach(r=>roleRows.push([fnLabel(r.desc), Number(r.qty.toFixed(2)), Number((r.qty/8).toFixed(2))]));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(roleRows), 'Mao de obra');
@@ -1157,7 +1338,7 @@ function exportExcel(){
       'Valor unit. (R$)','Valor total (R$)','Incidência (%)'
     ]];
     orcamento.forEach(r=>{
-      if(r.level==='item'){
+      if(r.level!=='subitem'){
         orcRows.push([r.numero, r.nome,'','','','','','','','','','','','','',
           Number((r.totalSemBdi||0).toFixed(2)),'', Number((r.valorTotal||0).toFixed(2)), Number((r.incidencia||0).toFixed(2))]);
       } else {
@@ -1196,14 +1377,9 @@ function exportExcel(){
    ============================================================ */
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_psFslciJm9QIZTBkCiF77Q_SxA0hTaA';
-const SUPA_HEADERS = {
-  'apikey': SUPABASE_KEY,
-  'Authorization': 'Bearer ' + SUPABASE_KEY,
-  'Content-Type': 'application/json'
-};
+const SUPA_HEADERS = { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' };
 const LOCAL_PTR_KEY = 'controle_sinapi:current_project_id';
 const LOCAL_CACHE_KEY = 'controle_sinapi:cache';
-
 let currentProjectId = null;
 let saveDebounce = null;
 
@@ -1213,47 +1389,22 @@ function setSyncStatus(text, isError){
   el.textContent = text;
   el.style.color = isError ? 'var(--red)' : 'var(--text-faint)';
 }
-
 async function supaRequest(path, options){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {headers: SUPA_HEADERS, ...options});
-  if(!res.ok){
-    const body = await res.text().catch(()=> '');
-    throw new Error(`Supabase ${res.status}: ${body}`);
-  }
+  if(!res.ok){ const body = await res.text().catch(()=> ''); throw new Error(`Supabase ${res.status}: ${body}`); }
   return res.status===204 ? null : res.json();
 }
-async function supaListProjects(){
-  return supaRequest('projetos?select=id,nome,atualizado_em&order=atualizado_em.desc', {method:'GET'});
-}
-async function supaLoadProject(id){
-  const rows = await supaRequest(`projetos?id=eq.${id}&select=*`, {method:'GET'});
-  return rows && rows[0] ? rows[0] : null;
-}
+async function supaListProjects(){ return supaRequest('projetos?select=id,nome,atualizado_em&order=atualizado_em.desc', {method:'GET'}); }
+async function supaLoadProject(id){ const rows = await supaRequest(`projetos?id=eq.${id}&select=*`, {method:'GET'}); return rows && rows[0] ? rows[0] : null; }
 async function supaUpsertProject(row){
-  return supaRequest('projetos', {
-    method:'POST',
-    headers: {...SUPA_HEADERS, 'Prefer':'resolution=merge-duplicates,return=representation'},
-    body: JSON.stringify(row)
-  });
+  return supaRequest('projetos', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
 }
-async function supaDeleteProject(id){
-  return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'});
-}
+async function supaDeleteProject(id){ return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'}); }
 
 function collectProjectPayload(){
-  return {
-    config: collectConfig(),
-    calendar,
-    orcamento: orcamento.map(r=>({...r})),
-    bdiPercent
-  };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent };
 }
-
-function saveProject(){
-  clearTimeout(saveDebounce);
-  saveDebounce = setTimeout(doSaveProject, 500);
-}
-
+function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
   const payload = collectProjectPayload();
   try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({id:currentProjectId, ...payload})); }catch(e){}
@@ -1264,19 +1415,14 @@ async function doSaveProject(){
   setSyncStatus('salvando…');
   try{
     await supaUpsertProject({
-      id: currentProjectId,
-      nome: payload.config.nome,
+      id: currentProjectId, nome: payload.config.nome,
       dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
     refreshProjectSelect();
-  }catch(e){
-    console.error(e);
-    setSyncStatus('offline — salvo só neste navegador', true);
-  }
+  }catch(e){ console.error(e); setSyncStatus('offline — salvo só neste navegador', true); }
 }
-
 function applyProjectPayload(payload){
   applyConfig(payload.config);
   if(payload.calendar) calendar = payload.calendar;
@@ -1284,7 +1430,6 @@ function applyProjectPayload(payload){
   bdiPercent = payload.bdiPercent || 0;
   nextOrcId = orcamento.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
 }
-
 async function refreshProjectSelect(){
   const sel = document.getElementById('projectSelect');
   try{
@@ -1294,11 +1439,9 @@ async function refreshProjectSelect(){
     sel.innerHTML = currentProjectId ? `<option value="${currentProjectId}" selected>${escapeXml(document.getElementById('cfgNome').value)}</option>` : '';
   }
 }
-
 async function loadProject(){
   let ptr = null;
   try{ ptr = localStorage.getItem(LOCAL_PTR_KEY); }catch(e){}
-
   try{
     if(ptr){
       const row = await supaLoadProject(ptr);
@@ -1325,17 +1468,11 @@ async function loadProject(){
     setSyncStatus('sem conexão com o banco — usando cópia local', true);
     try{
       const raw = localStorage.getItem(LOCAL_CACHE_KEY);
-      if(raw){
-        const payload = JSON.parse(raw);
-        currentProjectId = payload.id || null;
-        applyProjectPayload(payload);
-        return true;
-      }
+      if(raw){ const payload = JSON.parse(raw); currentProjectId = payload.id || null; applyProjectPayload(payload); return true; }
     }catch(e2){}
   }
   return false;
 }
-
 async function switchProject(id){
   const row = await supaLoadProject(id);
   if(!row) return;
@@ -1346,7 +1483,6 @@ async function switchProject(id){
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
 }
-
 async function createNewProject(){
   const nome = prompt('Nome da nova obra:', 'Nova obra');
   if(!nome) return;
@@ -1359,27 +1495,17 @@ async function createNewProject(){
   const usarEap = await showModal(
     'EAP Padrão',
     'Quer começar este orçamento com a <b>EAP Padrão</b> (estrutura de itens e subitens já pronta, com alguns códigos SINAPI preenchidos)? Você pode editar tudo depois.',
-    [
-      {label:'Começar em branco', value:'nao'},
-      {label:'Usar EAP Padrão', value:'sim', primary:true},
-    ]
+    [ {label:'Começar em branco', value:'nao'}, {label:'Usar EAP Padrão', value:'sim', primary:true} ]
   );
   if(usarEap==='sim'){
     setOrcLoadStatus('carregando EAP Padrão…');
-    try{
-      await loadEapPadraoIntoOrcamento();
-      setOrcLoadStatus('');
-    }catch(e){
-      console.error(e);
-      setOrcLoadStatus('não consegui carregar a EAP Padrão (eap_padrao.json) — comece manualmente.', true);
-    }
+    try{ await loadEapPadraoIntoOrcamento(); setOrcLoadStatus(''); }
+    catch(e){ console.error(e); setOrcLoadStatus('não consegui carregar a EAP Padrão (eap_padrao.json) — comece manualmente.', true); }
   }
-
   renderCalendarTab();
   recalcAll();
   await doSaveProject();
 }
-
 async function deleteCurrentProject(){
   const confirmed = await showDeleteConfirmModal();
   if(!confirmed) return;
@@ -1399,12 +1525,8 @@ async function deleteCurrentProject(){
     document.getElementById('bdiPercent').value = bdiPercent;
     recalcAll();
     await refreshProjectSelect();
-  }catch(e){
-    console.error(e);
-    showToast('Não consegui excluir — confira a conexão com o banco.');
-  }
+  }catch(e){ console.error(e); showToast('Não consegui excluir — confira a conexão com o banco.'); }
 }
-
 function setOrcLoadStatus(text, isError){
   const el = document.getElementById('orcLoadStatus');
   if(!el) return;
@@ -1413,26 +1535,29 @@ function setOrcLoadStatus(text, isError){
 }
 
 /* ============================================================
-   17. TABS / TOPBAR / INIT
+   17. NAVEGAÇÃO / TOPBAR / INIT
    ============================================================ */
 function setupTabs(){
-  document.querySelectorAll('.tab').forEach(tab=>{
-    tab.addEventListener('click', ()=>{
-      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.navbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.navbtn').forEach(b=>b.classList.remove('active'));
       document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
-      if(tab.dataset.tab==='cronograma') renderGantt();
-      if(tab.dataset.tab==='dashboard') setTimeout(renderDashboard, 30);
+      btn.classList.add('active');
+      document.getElementById('panel-'+btn.dataset.tab).classList.add('active');
+      if(btn.dataset.tab==='cronograma') renderGantt();
+      if(btn.dataset.tab==='dashboard') setTimeout(renderDashboardAll, 30);
+      document.getElementById('sidebar').classList.remove('open');
     });
   });
+  const ham = document.getElementById('btnHamburger');
+  if(ham) ham.addEventListener('click', ()=> document.getElementById('sidebar').classList.toggle('open'));
 }
 
 function setupTopbar(){
   document.getElementById('btnExport').addEventListener('click', exportExcel);
   document.getElementById('btnNewProject').addEventListener('click', createNewProject);
   document.getElementById('projectSelect').addEventListener('change', (e)=> switchProject(e.target.value));
-  document.getElementById('btnAddOrcItem').addEventListener('click', addOrcRow);
+  document.getElementById('btnAddOrcItem').addEventListener('click', addOrcRowGlobal);
 
   document.getElementById('btnUpdateSinapi').addEventListener('click', ()=> document.getElementById('sinapiUpload').click());
   document.getElementById('sinapiUpload').addEventListener('change', async (e)=>{
@@ -1445,9 +1570,9 @@ function setupTopbar(){
       const parsed = parseSinapiWorkbook(wb);
       DB = parsed;
       unitMemo = {};
-      document.getElementById('dataStamp').textContent = `${DB.tops.length.toLocaleString('pt-BR')} composições carregadas (sem preços — veja abaixo)`;
+      updateDataStamp(' — sem preços neste upload rápido, veja abaixo');
       document.getElementById('loadStatus').textContent = '';
-      showToast(`Base atualizada: ${DB.tops.length} composições. Atenção: esse upload rápido não traz preços (R$) para a aba Orçamento — só quantidades/horas. Para atualizar com preços, rode convert_sinapi.py com a planilha SINAPI completa e republique o sinapi_data.json.`);
+      showToast(`Base atualizada: ${DB.tops.length} composições. Atenção: esse upload rápido não traz preços (R$) nem a referência do mês. Para atualizar por completo, rode convert_sinapi.py com a planilha SINAPI completa e republique o sinapi_data.json.`);
       recalcAll();
     }catch(err){
       console.error(err);
@@ -1463,6 +1588,7 @@ function setupTopbar(){
   setupCalendarTab();
   setupBdiTab();
   setupDashboardTab();
+  setupGanttToggle();
   setupConfigTab();
   await loadSinapi();
   const had = await loadProject();

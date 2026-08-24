@@ -37,7 +37,7 @@
   --sidebar-w: 226px;
 }
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;height:100%;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;height:100%;overflow:hidden;}
 body{
   background-image:
     linear-gradient(var(--line-soft) 1px, transparent 1px),
@@ -82,8 +82,8 @@ input,select{font-family:var(--sans);}
 .navbtn .ico{width:15px;flex:none;text-align:center;font-family:var(--mono);font-size:12px;}
 .navbtn .count{margin-left:auto;background:var(--line);color:var(--text-dim);border-radius:8px;padding:0 6px;font-size:10px;}
 
-.main{flex:1;overflow-y:auto;min-width:0;}
-.main-inner{max-width:1500px;margin:0;padding:8px 6px 40px 8px;}
+.main{flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;}
+.main-inner{max-width:none;margin:0;padding:6px 6px 40px 6px;width:100%;}
 
 .topbar-mobile{display:none;align-items:center;gap:10px;padding:12px 16px;background:var(--bg-panel);border-bottom:1px solid var(--line);}
 .hamburger{background:none;border:1px solid var(--line);color:var(--text);border-radius:4px;padding:6px 10px;font-size:16px;}
@@ -150,6 +150,8 @@ thead th{
 tbody td{padding:6px 10px;border-bottom:1px solid var(--line-soft);vertical-align:middle;}
 tbody tr:hover{background:rgba(255,255,255,0.015);}
 tbody tr:last-child td{border-bottom:none;}
+table.zebra tbody tr:nth-child(odd){background:rgba(255,255,255,0.018);}
+table.zebra tbody tr:hover{background:rgba(232,163,61,0.06);}
 td.num,th.num{text-align:right;font-family:var(--mono);}
 td.code,th.code{font-family:var(--mono);color:var(--blue);}
 .row-sub{background:var(--bg-inset);}
@@ -273,6 +275,9 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 #tblOrcamento input[type=number].cell{-moz-appearance:textfield;}
 #tblOrcamento input[type=number].cell::-webkit-inner-spin-button,
 #tblOrcamento input[type=number].cell::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
+input.nospin{-moz-appearance:textfield;}
+input.nospin::-webkit-inner-spin-button,
+input.nospin::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
 tr.drag-over td{border-top:2px solid var(--accent) !important;}
 tr[draggable="true"]{cursor:default;}
 .orc-actions{display:flex;gap:2px;align-items:center;}
@@ -305,6 +310,7 @@ tr[draggable="true"]{cursor:default;}
       <button class="navbtn" data-tab="dashboard"><span class="ico">6</span> Dashboard</button>
       <div class="navsep"></div>
       <button class="navbtn" data-tab="compras"><span class="ico">7</span> Compras</button>
+      <button class="navbtn" data-tab="estoque"><span class="ico">7b</span> Estoque</button>
       <button class="navbtn" data-tab="fluxocaixa"><span class="ico">8</span> Fluxo de caixa</button>
       <button class="navbtn" data-tab="composicoes"><span class="ico">9</span> Composições</button>
       <button class="navbtn" data-tab="quantitativos"><span class="ico">10</span> Quantitativos</button>
@@ -374,7 +380,7 @@ tr[draggable="true"]{cursor:default;}
             <div class="big">Orçamento vazio</div>
             Clique em "+ Adicionar linha" para começar, ou crie um novo projeto e escolha usar a EAP Padrão.
           </div>
-          <p class="hint">Arraste pela alcinha (⠿) para reordenar — mover um Item leva todo o grupo junto.</p>
+          <p class="hint">Arraste pela alcinha (⠿) para reordenar — mover um Item leva todo o grupo junto. Para agrupar um subitem dentro de um "Subitem principal", arraste-o e solte sobre a linha do subitem principal.</p>
         </div>
       </div>
 
@@ -649,6 +655,51 @@ tr[draggable="true"]{cursor:default;}
             Clique em "+ Adicionar compra" para começar.
           </div>
         </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">agenda</span>Compras da semana</h2>
+          </div>
+          <p class="desc">Insumos cujo pedido precisa ser feito nos próximos 7 dias (ou que já estão atrasados), considerando a antecedência configurada abaixo.</p>
+          <div id="comprasDaSemanaList"></div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">previsão</span>Previsão de compras futuras</h2>
+            <div style="display:flex;gap:6px;">
+              <button class="btn small" id="btnPrevCompSemana" data-period="semana">Semana</button>
+              <button class="btn small active" id="btnPrevCompQuinzena" data-period="quinzena">Quinzena</button>
+              <button class="btn small" id="btnPrevCompMes" data-period="mes">Mês</button>
+            </div>
+          </div>
+          <p class="desc">Calculado a partir das composições SINAPI de cada subitem e das datas do cronograma (Planejamento). Ajuste "Antecipar pedido" para definir com quantos dias úteis de antecedência cada insumo precisa ser encomendado.</p>
+          <div class="tbl-wrap">
+            <table id="tblPrevisaoCompras"><thead><tr>
+              <th style="width:80px;">Período</th><th>Subitem</th><th style="width:90px;">Tipo</th><th>Insumo</th>
+              <th class="num" style="width:110px;">Quantidade</th><th style="width:90px;">Data de uso</th><th style="width:170px;">Antecipar pedido (dias úteis)</th>
+            </tr></thead><tbody id="tbodyPrevisaoCompras"></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="panel" id="panel-estoque">
+        <div class="card">
+          <h2><span class="tag">estoque</span>Materiais em estoque</h2>
+          <p class="desc">Todo material registrado em Compras entra automaticamente aqui. Registre o uso para acompanhar o saldo restante de cada material na obra.</p>
+          <div class="tbl-wrap">
+            <table id="tblEstoque"><thead><tr>
+              <th>Material</th><th style="width:70px;">Unid.</th>
+              <th class="num" style="width:100px;">Comprado</th><th class="num" style="width:100px;">Usado</th>
+              <th class="num" style="width:100px;">Saldo</th><th style="width:130px;"></th>
+            </tr></thead><tbody id="tbodyEstoque"></tbody></table>
+          </div>
+          <div class="empty-state" id="emptyEstoque" style="display:none;">
+            <div class="big">Nenhum material comprado ainda</div>
+            Registre compras do tipo "Material" na aba Compras para vê-los aqui.
+          </div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">histórico</span>Uso registrado</h2>
+          <div id="estoqueConsumosList"></div>
+        </div>
       </div>
       <div class="panel" id="panel-fluxocaixa">
         <div class="card">
@@ -667,11 +718,15 @@ tr[draggable="true"]{cursor:default;}
 
         <div class="card">
           <h2><span class="tag">previsto × realizado</span>Previsto × Realizado por item</h2>
-          <p class="desc">Compara o valor orçado de cada item/subitem (mão de obra, material, equipamento e extra) com o total já comprado/registrado em Compras.</p>
+          <p class="desc">Compara o valor orçado de cada subitem (mão de obra, material e equipamento) com o total já comprado/registrado em Compras, incluindo gastos extras não previstos no orçamento.</p>
           <div class="tbl-wrap">
-            <table id="tblPrevRealizado"><thead><tr>
-              <th>Item / Subitem</th><th style="width:90px;">Tipo</th><th class="num" style="width:110px;">Previsto (R$)</th>
-              <th class="num" style="width:110px;">Realizado (R$)</th><th class="num" style="width:80px;">% real.</th>
+            <table class="zebra" id="tblPrevRealizado"><thead><tr>
+              <th>Item / Subitem</th>
+              <th class="num" style="width:100px;">Mão de obra (prev.)</th><th class="num" style="width:100px;">Mão de obra (real.)</th>
+              <th class="num" style="width:100px;">Material (prev.)</th><th class="num" style="width:100px;">Material (real.)</th>
+              <th class="num" style="width:100px;">Equip. (prev.)</th><th class="num" style="width:100px;">Equip. (real.)</th>
+              <th class="num" style="width:90px;">Extra (real.)</th>
+              <th class="num" style="width:80px;">% do total</th>
             </tr></thead><tbody id="tbodyPrevRealizado"></tbody></table>
           </div>
           <div style="position:relative;height:320px;margin-top:14px;">
@@ -708,9 +763,61 @@ tr[draggable="true"]{cursor:default;}
         </div>
       </div>
       <div class="panel" id="panel-composicoes">
-        <div class="placeholder-panel">
-          <div class="big">Composições</div>
-          <p>Mostra as composições usadas. Criação de composições próprias.</p>
+        <div class="card">
+          <h2><span class="tag">nova</span>Criar composição própria</h2>
+          <p class="desc">Monte uma composição personalizada combinando insumos do SINAPI e/ou outras composições próprias já criadas (usadas como base). O custo unitário é calculado automaticamente a partir dos preços SINAPI cadastrados.</p>
+          <div class="toolbar-row" style="gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:160px;">
+              <label class="hint">Código</label>
+              <input type="text" class="cell" id="compNovoCodigo" placeholder="ex.: P-01">
+            </div>
+            <div style="flex:2;min-width:220px;">
+              <label class="hint">Descrição</label>
+              <input type="text" class="cell" id="compNovoDescricao" placeholder="Descrição da composição">
+            </div>
+            <div style="flex:0 0 90px;">
+              <label class="hint">Unidade</label>
+              <input type="text" class="cell" id="compNovoUnidade" placeholder="m2">
+            </div>
+          </div>
+          <div class="tbl-wrap" style="margin-top:10px;">
+            <table id="tblCompNovoItens"><thead><tr>
+              <th style="width:110px;">Origem</th><th>Insumo / composição</th><th style="width:100px;" class="num">Coeficiente</th><th style="width:60px;">Un.</th><th style="width:34px;"></th>
+            </tr></thead><tbody id="tbodyCompNovoItens"></tbody></table>
+          </div>
+          <div class="toolbar-row" style="margin-top:8px;">
+            <button class="btn small" id="btnCompNovoAddItem">+ Adicionar insumo/composição</button>
+            <div style="display:flex;gap:8px;">
+              <span class="hint" id="compNovoPreview"></span>
+              <button class="btn primary small" id="btnCompNovoSalvar">Salvar composição</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">próprias</span>Composições próprias criadas</h2>
+          </div>
+          <div class="tbl-wrap">
+            <table id="tblComposicoesProprias"><thead><tr>
+              <th style="width:90px;">Código</th><th>Descrição</th><th style="width:60px;">Un.</th>
+              <th class="num" style="width:90px;">MDO</th><th class="num" style="width:90px;">MAT</th><th class="num" style="width:90px;">EQUIP</th><th class="num" style="width:100px;">Total unit.</th><th style="width:34px;"></th>
+            </tr></thead><tbody id="tbodyComposicoesProprias"></tbody></table>
+          </div>
+          <div class="empty-state" id="emptyComposicoesProprias" style="display:none;">Nenhuma composição própria criada ainda.</div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">em uso</span>Composições usadas no orçamento</h2>
+            <button class="btn small" id="btnExportComposicoes">Exportar XLSX</button>
+          </div>
+          <p class="desc">Todas as composições (SINAPI e próprias) referenciadas por algum subitem do orçamento atual.</p>
+          <div class="tbl-wrap">
+            <table id="tblComposicoesUsadas"><thead><tr>
+              <th style="width:100px;">Código</th><th>Descrição</th><th style="width:60px;">Un.</th>
+              <th class="num" style="width:90px;">MDO</th><th class="num" style="width:90px;">MAT</th><th class="num" style="width:90px;">EQUIP</th><th class="num" style="width:100px;">Total unit.</th><th class="num" style="width:80px;">Nº usos</th>
+            </tr></thead><tbody id="tbodyComposicoesUsadas"></tbody></table>
+          </div>
+          <div class="empty-state" id="emptyComposicoesUsadas" style="display:none;">Nenhum subitem com composição SINAPI válida no orçamento ainda.</div>
         </div>
       </div>
       <div class="panel" id="panel-quantitativos">

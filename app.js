@@ -35,6 +35,9 @@ let saldoObraChart = null;
 
 const TIPOS_COMPRA = ['Mão de obra','Material','Equipamento','Extra'];
 const FORMAS_PAGTO = ['PIX','Cartão de crédito','Cartão de débito','Espécie'];
+const UNIDADES_COMPRA = ['ajuda de custo','balde','diária','g','kg','lata','litro','m','m2','m3','mensal','mil','produção','quinzenal','salário','semanal','ton','unid','vara','vb'];
+let antecipacao = {};
+let comprasPrevisaoPeriod = 'quinzena';
 
 /* ---------------- utilidades ---------------- */
 function normalize(s){
@@ -554,7 +557,9 @@ function renderAll(){
   renderGantt();
   renderDashboardAll();
   try{ renderCompras(); }catch(e){ console.error('Compras:', e); }
+  try{ renderEstoque(); }catch(e){ console.error('Estoque:', e); }
   try{ renderFluxoCaixaAll(); }catch(e){ console.error('Fluxo de caixa:', e); }
+  try{ renderComposicoes(); }catch(e){ console.error('Composições:', e); }
 }
 
 /* ============================================================
@@ -605,7 +610,6 @@ function orcRowHtml(r){
       <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
       <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
       <td class="orc-actions">
-        <button class="icon-btn add" data-orcaddchild="${r.id}" title="Adicionar subitem aqui">+</button>
         <button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button>
       </td>
     </tr>`;
@@ -694,9 +698,6 @@ function bindOrcamentoEvents(){
   document.querySelectorAll('[data-orcadd]').forEach(btn=>{
     btn.addEventListener('click', ()=> addOrcRowInGroup(+btn.dataset.orcadd));
   });
-  document.querySelectorAll('[data-orcaddchild]').forEach(btn=>{
-    btn.addEventListener('click', ()=> addSubitemUnderPrincipal(+btn.dataset.orcaddchild));
-  });
 }
 
 /* Bloco de linhas que se move junto ao arrastar startIndex */
@@ -725,10 +726,17 @@ function bindOrcDragEvents(){
       const targetId = +tr.dataset.orc;
       if(dragBlockIds.includes(targetId)){ dragBlockIds=null; return; }
       const block = orcamento.filter(r=>dragBlockIds.includes(r.id));
+      const targetRow = orcamento.find(r=>r.id===targetId);
+      const droppingOnlySubitens = block.every(r=>r.level==='subitem');
       orcamento = orcamento.filter(r=>!dragBlockIds.includes(r.id));
-      const targetIdx = orcamento.findIndex(r=>r.id===targetId);
+      let targetIdx = orcamento.findIndex(r=>r.id===targetId);
       dragBlockIds = null;
       if(targetIdx===-1) return;
+      /* Soltar um subitem em cima do cabeçalho de um Subitem principal
+         faz com que ele entre para dentro do grupo (vira o 1º filho). */
+      if(targetRow && targetRow.level==='subitem_principal' && droppingOnlySubitens){
+        targetIdx = targetIdx + 1;
+      }
       orcamento.splice(targetIdx, 0, ...block);
       recalcAll();
     });
@@ -1511,18 +1519,34 @@ function compraRowHtml(c){
     <td><input type="text" class="cell" data-cf="loja" data-compra="${c.id}" value="${escapeAttr(c.loja)}"></td>
     <td><input type="text" class="cell" data-cf="notaNum" data-compra="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
     <td><select class="cell" data-cf="formaPagto" data-compra="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
-    <td>${showParc?`<input type="number" min="1" step="1" class="cell small" style="width:44px;" data-cf="parcelas" data-compra="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
+    <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cf="parcelas" data-compra="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
     <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${bancos.map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
     <td><input type="text" class="cell" data-cf="descricao" data-compra="${c.id}" value="${escapeAttr(c.descricao)}"></td>
-    <td class="num"><input type="number" step="0.01" class="cell small" data-cf="quantidade" data-compra="${c.id}" value="${fmtInput(c.quantidade)}"></td>
-    <td><input type="text" class="cell" style="width:50px;" data-cf="unidade" data-compra="${c.id}" value="${escapeAttr(c.unidade)}"></td>
-    <td class="num"><input type="number" step="0.01" class="cell small" data-cf="valorUnid" data-compra="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
-    <td class="num" style="font-family:var(--mono);color:var(--accent)">R$ ${fmtNum(c.valorTotal,2)}</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="quantidade" data-compra="${c.id}" value="${fmtInput(c.quantidade)}"></td>
+    <td><select class="cell" style="width:78px;" data-cf="unidade" data-compra="${c.id}">
+      <option value="">—</option>
+      ${UNIDADES_COMPRA.map(u=>`<option ${u===c.unidade?'selected':''}>${u}</option>`).join('')}
+    </select></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="valorUnid" data-compra="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)" data-comprtotal="${c.id}">R$ ${fmtNum(c.valorTotal,2)}</td>
     <td><button class="icon-btn" data-comprremove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
 }
 function bindComprasEvents(){
   document.querySelectorAll('#tblCompras [data-cf]').forEach(el=>{
+    if(el.dataset.cf==='quantidade' || el.dataset.cf==='valorUnid'){
+      el.addEventListener('input', ()=>{
+        const c = compras.find(x=>String(x.id)===el.dataset.compra);
+        if(!c) return;
+        const qtyEl = document.querySelector(`#tblCompras [data-cf="quantidade"][data-compra="${c.id}"]`);
+        const priceEl = document.querySelector(`#tblCompras [data-cf="valorUnid"][data-compra="${c.id}"]`);
+        const qty = parseFloat(qtyEl && qtyEl.value)||0;
+        const price = parseFloat(priceEl && priceEl.value)||0;
+        c.valorTotal = round2(qty*price);
+        const totalCell = document.querySelector(`[data-comprtotal="${c.id}"]`);
+        if(totalCell) totalCell.textContent = 'R$ ' + fmtNum(c.valorTotal, 2);
+      });
+    }
     el.addEventListener('change', ()=>{
       const c = compras.find(x=>String(x.id)===el.dataset.compra);
       if(!c) return;
@@ -1530,6 +1554,8 @@ function bindComprasEvents(){
       if(f==='quantidade' || f==='valorUnid'){
         c[f] = parseFloat(el.value)||0;
         c.valorTotal = round2((c.quantidade||0)*(c.valorUnid||0));
+        const totalCell = document.querySelector(`[data-comprtotal="${c.id}"]`);
+        if(totalCell) totalCell.textContent = 'R$ ' + fmtNum(c.valorTotal, 2);
       } else if(f==='parcelas'){
         c.parcelas = Math.max(1, parseInt(el.value,10)||1);
       } else {
@@ -1537,6 +1563,7 @@ function bindComprasEvents(){
       }
       saveProject();
       if(f==='formaPagto'){ renderCompras(); return; }
+      renderComprasStats();
       renderFluxoCaixaAll();
     });
   });
@@ -1548,6 +1575,16 @@ function bindComprasEvents(){
       saveProject();
     });
   });
+}
+function renderComprasStats(){
+  const total = compras.reduce((s,c)=>s+(c.valorTotal||0),0);
+  const strip = document.getElementById('comprasStatsStrip');
+  if(strip){
+    strip.innerHTML = `
+      <div class="stat accent"><div class="lbl">Total comprado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+      <div class="stat"><div class="lbl">Registros</div><div class="val">${compras.length}</div></div>
+    `;
+  }
 }
 function renderBancosChips(){
   const wrap = document.getElementById('bancosChips');
@@ -1570,14 +1607,8 @@ function renderCompras(){
   if(emptyEl) emptyEl.style.display = compras.length ? 'none':'block';
   tbody.innerHTML = compras.map(compraRowHtml).join('');
   bindComprasEvents();
-  const total = compras.reduce((s,c)=>s+(c.valorTotal||0),0);
-  const strip = document.getElementById('comprasStatsStrip');
-  if(strip){
-    strip.innerHTML = `
-      <div class="stat accent"><div class="lbl">Total comprado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
-      <div class="stat"><div class="lbl">Registros</div><div class="val">${compras.length}</div></div>
-    `;
-  }
+  renderComprasStats();
+  renderPrevisaoCompras();
 }
 function addCompra(){
   compras.push({id:nextCompraId++, orcId:null, tipo:'Material', data:toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0});
@@ -1593,9 +1624,406 @@ function addBanco(){
   renderCompras();
   saveProject();
 }
+function computeComprasPrevisaoRows(){
+  const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.breakdown);
+  const rows = [];
+  subitens.forEach(act=>{
+    ['materials','equip'].forEach(kind=>{
+      const map = act.breakdown[kind];
+      if(!map) return;
+      for(const code in map){
+        const info = map[code];
+        if(!info.qty) continue;
+        const dias = antecipacao[code] || 0;
+        const dataUso = act.start;
+        const dataPedido = dias>0 ? addWorkdaysSigned(dataUso, -dias) : dataUso;
+        rows.push({
+          subitemId: act.id, subitemNome: `${act.numero} ${act.nome}`,
+          kind: kind==='materials'?'Material':'Equipamento', code,
+          desc: info.desc || ('#'+code), unit: info.unit || '',
+          qty: info.qty, dataUso, dataPedido, antecedencia: dias,
+        });
+      }
+    });
+  });
+  rows.sort((a,b)=>a.dataUso-b.dataUso);
+  return rows;
+}
+function renderPrevisaoCompras(){
+  const rows = computeComprasPrevisaoRows();
+  const tbody = document.getElementById('tbodyPrevisaoCompras');
+  if(tbody){
+    if(rows.length===0){
+      tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-faint);text-align:center;padding:20px;">Sem cronograma calculado ainda — preencha o Orçamento e o Planejamento.</td></tr>`;
+    } else {
+      const projStart = new Date(Math.min(...rows.map(r=>r.dataUso)));
+      tbody.innerHTML = rows.map(r=>{
+        const periodo = periodLabelFor(periodKeyFor(r.dataUso, comprasPrevisaoPeriod, projStart), comprasPrevisaoPeriod, projStart);
+        return `<tr>
+          <td>${periodo}</td>
+          <td>${escapeXml(r.subitemNome)}</td>
+          <td>${r.kind}</td>
+          <td>${escapeXml(r.desc)}</td>
+          <td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)} ${escapeXml(r.unit||'')}</td>
+          <td>${fmtDate(r.dataUso)}</td>
+          <td><input type="number" min="0" step="1" class="cell small nospin" style="width:56px;" data-antecip="${r.code}" value="${r.antecedencia||0}" title="Dias úteis de antecedência para pedir"> <span class="hint">→ pedir até ${fmtDate(r.dataPedido)}</span></td>
+        </tr>`;
+      }).join('');
+      tbody.querySelectorAll('[data-antecip]').forEach(inp=>{
+        inp.addEventListener('change', ()=>{
+          antecipacao[inp.dataset.antecip] = Math.max(0, parseInt(inp.value,10)||0);
+          saveProject();
+          renderPrevisaoCompras();
+        });
+      });
+    }
+  }
+  renderComprasDaSemana(rows);
+}
+function renderComprasDaSemana(rows){
+  const wrap = document.getElementById('comprasDaSemanaList');
+  if(!wrap) return;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const weekEnd = addDays(today, 7);
+  const overdue = rows.filter(r=> r.dataPedido<today && r.dataUso>=today).sort((a,b)=>a.dataUso-b.dataUso);
+  const due = rows.filter(r=> r.dataPedido>=today && r.dataPedido<weekEnd).sort((a,b)=>a.dataPedido-b.dataPedido);
+  if(overdue.length===0 && due.length===0){
+    wrap.innerHTML = '<div class="hint">Nenhum pedido de compra precisa ser feito nos próximos 7 dias.</div>';
+    return;
+  }
+  const item = (r, crit)=>`
+    <div style="padding:8px 10px;border:1px solid var(--line);border-left:3px solid ${crit?'var(--red)':'var(--accent)'};border-radius:4px;margin-bottom:6px;">
+      <b>${escapeXml(r.desc)}</b> · ${fmtNum(r.qty,2)} ${escapeXml(r.unit||'')}
+      <span class="badge ${crit?'crit':'warn'}" style="margin-left:6px;">${crit?'pedido atrasado':'pedir até '+fmtDate(r.dataPedido)}</span>
+      <div class="hint">uso em ${fmtDate(r.dataUso)} — ${escapeXml(r.subitemNome)}</div>
+    </div>`;
+  wrap.innerHTML = overdue.map(r=>item(r,true)).join('') + due.map(r=>item(r,false)).join('');
+}
+function setPrevCompPeriod(p){
+  comprasPrevisaoPeriod = p;
+  document.getElementById('btnPrevCompSemana').classList.toggle('active', p==='semana');
+  document.getElementById('btnPrevCompQuinzena').classList.toggle('active', p==='quinzena');
+  document.getElementById('btnPrevCompMes').classList.toggle('active', p==='mes');
+  renderPrevisaoCompras();
+}
 function setupComprasTab(){
   document.getElementById('btnAddCompra').addEventListener('click', addCompra);
   document.getElementById('btnAddBanco').addEventListener('click', addBanco);
+  document.getElementById('btnPrevCompSemana').addEventListener('click', ()=>setPrevCompPeriod('semana'));
+  document.getElementById('btnPrevCompQuinzena').addEventListener('click', ()=>setPrevCompPeriod('quinzena'));
+  document.getElementById('btnPrevCompMes').addEventListener('click', ()=>setPrevCompPeriod('mes'));
+}
+
+/* ============================================================
+   15e. COMPOSIÇÕES PRÓPRIAS
+   ============================================================ */
+let composicoesProprias = [];
+let nextComposicaoId = 1;
+let compNovoItens = []; // {ref:'sinapi'|'propria', code, desc, unit, coef}
+
+function computeCustomBreakdown(comp, computing){
+  computing = computing || new Set();
+  const key = 'own:'+comp.id;
+  if(computing.has(key)) return emptyBreakdown();
+  computing.add(key);
+  const result = emptyBreakdown();
+  (comp.itens||[]).forEach(it=>{
+    const coef = parseFloat(it.coef)||0;
+    if(coef===0) return;
+    if(it.ref==='sinapi'){
+      const code = parseInt(it.code,10);
+      const item = DB.items[code];
+      const desc = item ? item[0] : (it.desc||('#'+code));
+      const unit = item ? item[1] : (it.unit||'');
+      if(unit==='H'){ addTo(result.roles, code, desc, unit, coef); return; }
+      if(unit==='CHP' || unit==='CHI'){ addTo(result.equip, code, desc, unit, coef); return; }
+      const hasChildren = DB.children[code] && DB.children[code].length>0;
+      if(hasChildren){ mergeScaled(result, computeUnitBreakdown(code), coef); }
+      else { addTo(result.materials, code, desc, unit, coef); }
+    } else if(it.ref==='propria'){
+      const sub = composicoesProprias.find(c=>String(c.id)===String(it.code));
+      if(!sub) return;
+      mergeScaled(result, computeCustomBreakdown(sub, computing), coef);
+    }
+  });
+  return result;
+}
+function priceCustomComposition(comp){
+  const b = computeCustomBreakdown(comp);
+  let mdo=0, mat=0, equip=0, semPreco=false;
+  for(const c in b.roles){ const p=priceOf(c); if(p===null) semPreco=true; else mdo+=p*b.roles[c].qty; }
+  for(const c in b.materials){ const p=priceOf(c); if(p===null) semPreco=true; else mat+=p*b.materials[c].qty; }
+  for(const c in b.equip){ const p=priceOf(c); if(p===null) semPreco=true; else equip+=p*b.equip[c].qty; }
+  return {mdo, mat, equip, total:mdo+mat+equip, semPreco};
+}
+function compNovoItemRowHtml(it, idx){
+  return `<tr data-compidx="${idx}">
+    <td><select class="cell" data-cnf="ref" data-compidx="${idx}">
+      <option value="sinapi" ${it.ref==='sinapi'?'selected':''}>SINAPI</option>
+      <option value="propria" ${it.ref==='propria'?'selected':''}>Própria</option>
+    </select></td>
+    <td>${it.ref==='propria'
+        ? `<select class="cell" data-cnf="code" data-compidx="${idx}"><option value="">selecione…</option>${composicoesProprias.filter(c=>c.id!==compEditingId).map(c=>`<option value="${c.id}" ${String(c.id)===String(it.code)?'selected':''}>${escapeXml(c.codigo)} — ${escapeXml(truncate(c.descricao,40))}</option>`).join('')}</select>`
+        : `<div class="code-search"><input type="text" class="cell mono" data-cnf="code" data-compidx="${idx}" value="${it.code||''}" placeholder="código ou descrição SINAPI…" autocomplete="off"></div>`}
+      <span class="hint">${escapeXml(truncate(it.desc||'',50))}</span></td>
+    <td class="num"><input type="number" step="0.0001" class="cell small" data-cnf="coef" data-compidx="${idx}" value="${it.coef??''}"></td>
+    <td>${escapeXml(it.unit||'')}</td>
+    <td><button class="icon-btn" data-compitemremove="${idx}" title="Remover">✕</button></td>
+  </tr>`;
+}
+let compEditingId = null;
+function renderCompNovoItens(){
+  const tbody = document.getElementById('tbodyCompNovoItens');
+  if(!tbody) return;
+  tbody.innerHTML = compNovoItens.length ? compNovoItens.map(compNovoItemRowHtml).join('') : `<tr><td colspan="5" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhum item adicionado ainda</td></tr>`;
+  tbody.querySelectorAll('[data-cnf="ref"]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const idx = +sel.dataset.compidx;
+      compNovoItens[idx].ref = sel.value;
+      compNovoItens[idx].code = ''; compNovoItens[idx].desc=''; compNovoItens[idx].unit='';
+      renderCompNovoItens();
+    });
+  });
+  tbody.querySelectorAll('select[data-cnf="code"]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const idx = +sel.dataset.compidx;
+      const comp = composicoesProprias.find(c=>String(c.id)===sel.value);
+      compNovoItens[idx].code = sel.value;
+      compNovoItens[idx].desc = comp ? comp.descricao : '';
+      compNovoItens[idx].unit = comp ? comp.unidade : '';
+      renderCompNovoPreview();
+    });
+  });
+  tbody.querySelectorAll('input[data-cnf="code"]').forEach(inp=>{
+    setupCodeSearch(inp, ()=>{
+      const idx = +inp.dataset.compidx;
+      const code = parseInt(inp.value,10);
+      const item = DB.items[code];
+      compNovoItens[idx].code = inp.value.trim();
+      compNovoItens[idx].desc = item ? item[0] : '';
+      compNovoItens[idx].unit = item ? item[1] : '';
+      renderCompNovoItens();
+      renderCompNovoPreview();
+    });
+  });
+  tbody.querySelectorAll('[data-cnf="coef"]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      compNovoItens[+inp.dataset.compidx].coef = parseFloat(inp.value)||0;
+      renderCompNovoPreview();
+    });
+  });
+  tbody.querySelectorAll('[data-compitemremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      compNovoItens.splice(+btn.dataset.compitemremove, 1);
+      renderCompNovoItens();
+      renderCompNovoPreview();
+    });
+  });
+  renderCompNovoPreview();
+}
+function renderCompNovoPreview(){
+  const el = document.getElementById('compNovoPreview');
+  if(!el) return;
+  const draft = {id:compEditingId||-1, itens:compNovoItens};
+  const p = priceCustomComposition(draft);
+  el.textContent = compNovoItens.length ? `Prévia — MDO R$ ${fmtNum(p.mdo,2)} · MAT R$ ${fmtNum(p.mat,2)} · EQUIP R$ ${fmtNum(p.equip,2)} · Total unit. R$ ${fmtNum(p.total,2)}${p.semPreco?' (parcial — algum insumo sem preço)':''}` : '';
+}
+function addCompNovoItem(){
+  compNovoItens.push({ref:'sinapi', code:'', desc:'', unit:'', coef:1});
+  renderCompNovoItens();
+}
+function resetCompNovoForm(){
+  document.getElementById('compNovoCodigo').value = '';
+  document.getElementById('compNovoDescricao').value = '';
+  document.getElementById('compNovoUnidade').value = '';
+  compNovoItens = [];
+  compEditingId = null;
+  renderCompNovoItens();
+}
+function salvarComposicaoPropria(){
+  const codigo = document.getElementById('compNovoCodigo').value.trim() || ('P-'+nextComposicaoId);
+  const descricao = document.getElementById('compNovoDescricao').value.trim();
+  const unidade = document.getElementById('compNovoUnidade').value.trim();
+  if(!descricao){ alert('Informe uma descrição para a composição.'); return; }
+  const itens = compNovoItens.filter(it=>it.code!=='' && it.code!==null && (parseFloat(it.coef)||0)!==0);
+  if(itens.length===0){ alert('Adicione ao menos um insumo/composição com coeficiente maior que zero.'); return; }
+  if(compEditingId){
+    const comp = composicoesProprias.find(c=>c.id===compEditingId);
+    Object.assign(comp, {codigo, descricao, unidade, itens});
+  } else {
+    composicoesProprias.push({id:nextComposicaoId++, codigo, descricao, unidade, itens, criadoEm:toISO(new Date())});
+  }
+  resetCompNovoForm();
+  renderComposicoes();
+  saveProject();
+}
+function editComposicaoPropria(id){
+  const comp = composicoesProprias.find(c=>String(c.id)===String(id));
+  if(!comp) return;
+  compEditingId = comp.id;
+  document.getElementById('compNovoCodigo').value = comp.codigo;
+  document.getElementById('compNovoDescricao').value = comp.descricao;
+  document.getElementById('compNovoUnidade').value = comp.unidade;
+  compNovoItens = comp.itens.map(it=>({...it}));
+  renderCompNovoItens();
+  document.getElementById('compNovoCodigo').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function removeComposicaoPropria(id){
+  if(!confirm('Remover esta composição própria? Isso não afeta composições que já a usam como base.')) return;
+  composicoesProprias = composicoesProprias.filter(c=>String(c.id)!==String(id));
+  renderComposicoes();
+  saveProject();
+}
+function renderComposicoesProprias(){
+  const tbody = document.getElementById('tbodyComposicoesProprias');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyComposicoesProprias');
+  if(emptyEl) emptyEl.style.display = composicoesProprias.length ? 'none':'block';
+  tbody.innerHTML = composicoesProprias.map(c=>{
+    const p = priceCustomComposition(c);
+    return `<tr>
+      <td class="mono">${escapeXml(c.codigo)}</td>
+      <td>${escapeXml(c.descricao)}</td>
+      <td>${escapeXml(c.unidade)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(p.mdo,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(p.mat,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(p.equip,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(p.total,2)}</td>
+      <td class="orc-actions">
+        <button class="icon-btn" data-compedit="${c.id}" title="Editar">✎</button>
+        <button class="icon-btn" data-compremove="${c.id}" title="Remover">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-compedit]').forEach(btn=> btn.addEventListener('click', ()=>editComposicaoPropria(btn.dataset.compedit)));
+  tbody.querySelectorAll('[data-compremove]').forEach(btn=> btn.addEventListener('click', ()=>removeComposicaoPropria(btn.dataset.compremove)));
+}
+function computeComposicoesUsadas(){
+  const usoCount = {};
+  orcamento.filter(r=>r.level==='subitem' && r.sinapiCode).forEach(r=>{
+    const code = parseInt(r.sinapiCode,10);
+    if(!code || !DB.items[code]) return;
+    usoCount[code] = (usoCount[code]||0)+1;
+  });
+  return Object.keys(usoCount).map(code=>{
+    const item = DB.items[code];
+    const pb = priceBreakdownUnit(code);
+    return { codigo: code, descricao: item[0], unidade: item[1], mdo: pb.mdo, mat: pb.mat, equip: pb.equip, total: pb.mdo+pb.mat+pb.equip, usos: usoCount[code] };
+  }).sort((a,b)=>b.usos-a.usos);
+}
+function renderComposicoesUsadas(){
+  const rows = computeComposicoesUsadas();
+  const tbody = document.getElementById('tbodyComposicoesUsadas');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyComposicoesUsadas');
+  if(emptyEl) emptyEl.style.display = rows.length ? 'none':'block';
+  tbody.innerHTML = rows.map(r=>`<tr>
+    <td class="mono">${r.codigo}</td><td>${escapeXml(r.descricao)}</td><td>${escapeXml(r.unidade)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.mdo,2)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.mat,2)}</td>
+    <td class="num" style="font-family:var(--mono)">${fmtNum(r.equip,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.total,2)}</td>
+    <td class="num">${r.usos}</td>
+  </tr>`).join('');
+}
+function exportComposicoesXlsx(){
+  if(typeof XLSX==='undefined'){ alert('Biblioteca de exportação não carregada.'); return; }
+  const wb = XLSX.utils.book_new();
+  const usadas = computeComposicoesUsadas();
+  const rowsUsadas = [['Código','Descrição','Unidade','MDO (R$)','MAT (R$)','EQUIP (R$)','Total unit. (R$)','Nº usos no orçamento']];
+  usadas.forEach(r=>rowsUsadas.push([r.codigo, r.descricao, r.unidade, round2(r.mdo), round2(r.mat), round2(r.equip), round2(r.total), r.usos]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsUsadas), 'Composições SINAPI usadas');
+  const rowsProprias = [['Código','Descrição','Unidade','MDO (R$)','MAT (R$)','EQUIP (R$)','Total unit. (R$)']];
+  composicoesProprias.forEach(c=>{
+    const p = priceCustomComposition(c);
+    rowsProprias.push([c.codigo, c.descricao, c.unidade, round2(p.mdo), round2(p.mat), round2(p.equip), round2(p.total)]);
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsProprias), 'Composições próprias');
+  XLSX.writeFile(wb, `Composicoes_${(collectConfig().nome||'Projeto').replace(/[^\w\- ]/g,'')}.xlsx`);
+}
+function renderComposicoes(){
+  renderComposicoesProprias();
+  renderComposicoesUsadas();
+  if(!compEditingId) renderCompNovoItens();
+}
+function setupComposicoesTab(){
+  document.getElementById('btnCompNovoAddItem').addEventListener('click', addCompNovoItem);
+  document.getElementById('btnCompNovoSalvar').addEventListener('click', salvarComposicaoPropria);
+  document.getElementById('btnExportComposicoes').addEventListener('click', exportComposicoesXlsx);
+  renderCompNovoItens();
+}
+
+/* ============================================================
+   15d. ESTOQUE
+   ============================================================ */
+let estoqueConsumos = [];
+let nextEstoqueConsumoId = 1;
+
+function estoqueKeyFor(desc, unidade){
+  return (desc||'').trim().toLowerCase()+'|'+(unidade||'').trim().toLowerCase();
+}
+function computeEstoqueGroups(){
+  const groups = {};
+  compras.filter(c=>c.tipo==='Material' && (c.descricao||'').trim()).forEach(c=>{
+    const key = estoqueKeyFor(c.descricao, c.unidade);
+    if(!groups[key]) groups[key] = {key, nome:c.descricao.trim(), unidade:c.unidade||'', comprado:0, gasto:0};
+    groups[key].comprado += (c.quantidade||0);
+  });
+  estoqueConsumos.forEach(u=>{
+    if(!groups[u.materialKey]) return;
+    groups[u.materialKey].gasto += (u.quantidade||0);
+  });
+  return Object.values(groups).map(g=>({...g, saldo: g.comprado-g.gasto})).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+}
+function renderEstoque(){
+  const groups = computeEstoqueGroups();
+  const tbody = document.getElementById('tbodyEstoque');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyEstoque');
+  if(emptyEl) emptyEl.style.display = groups.length ? 'none' : 'block';
+  tbody.innerHTML = groups.map(g=>{
+    const cls = g.saldo<=0.0001 ? 'crit' : (g.comprado>0 && g.saldo < g.comprado*0.15 ? 'warn' : 'ok');
+    return `<tr>
+      <td>${escapeXml(g.nome)}</td>
+      <td>${escapeXml(g.unidade)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(g.comprado,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(g.gasto,2)}</td>
+      <td class="num"><span class="badge ${cls}" style="font-family:var(--mono)">${fmtNum(g.saldo,2)}</span></td>
+      <td><button class="btn small" data-estuse="${escapeAttr(g.key)}">Registrar uso</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-estuse]').forEach(btn=>{
+    btn.addEventListener('click', ()=> registrarUsoEstoque(btn.dataset.estuse));
+  });
+  renderEstoqueConsumosList(groups);
+}
+function registrarUsoEstoque(key){
+  const qtyStr = prompt('Quantidade usada:');
+  if(qtyStr===null) return;
+  const qty = parseFloat(qtyStr.replace(',','.'));
+  if(!qty || qty<=0){ alert('Quantidade inválida.'); return; }
+  const dataStr = prompt('Data de uso (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
+  estoqueConsumos.push({id:nextEstoqueConsumoId++, materialKey:key, quantidade:qty, data:dataStr});
+  renderEstoque();
+  saveProject();
+}
+function renderEstoqueConsumosList(groups){
+  const wrap = document.getElementById('estoqueConsumosList');
+  if(!wrap) return;
+  if(estoqueConsumos.length===0){ wrap.innerHTML = '<div class="hint">Nenhum uso registrado ainda.</div>'; return; }
+  const nameByKey = {};
+  (groups||computeEstoqueGroups()).forEach(g=>{ nameByKey[g.key] = g.nome + (g.unidade?` (${g.unidade})`:''); });
+  const sorted = [...estoqueConsumos].sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  wrap.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th style="width:110px;">Data</th><th>Material</th><th class="num" style="width:110px;">Quant. usada</th><th style="width:34px;"></th></tr></thead><tbody>
+    ${sorted.map(u=>`<tr><td>${fmtDate(u.data)}</td><td>${escapeXml(nameByKey[u.materialKey]||u.materialKey)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(u.quantidade,2)}</td><td><button class="icon-btn" data-estremove="${u.id}" title="Remover">✕</button></td></tr>`).join('')}
+  </tbody></table></div>`;
+  wrap.querySelectorAll('[data-estremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      estoqueConsumos = estoqueConsumos.filter(u=>String(u.id)!==btn.dataset.estremove);
+      renderEstoque();
+      saveProject();
+    });
+  });
 }
 
 /* ============================================================
@@ -1655,17 +2083,16 @@ function computePrevRealizado(){
   });
   const rows = [];
   subitens.forEach(r=>{
-    const prevMap = {
-      'Mão de obra': (r.totalMdoSemBdi||0)*bdiMul,
-      'Material': (r.totalMatSemBdi||0)*bdiMul,
-      'Equipamento': (r.totalEquipSemBdi||0)*bdiMul,
-    };
+    const prevMdo = (r.totalMdoSemBdi||0)*bdiMul;
+    const prevMat = (r.totalMatSemBdi||0)*bdiMul;
+    const prevEquip = (r.totalEquipSemBdi||0)*bdiMul;
     const real = realizadoByOrc[r.id] || {};
-    ['Mão de obra','Material','Equipamento'].forEach(tipo=>{
-      const prev = prevMap[tipo]||0, rea = real[tipo]||0;
-      if(prev>0.0001 || rea>0.0001) rows.push({nome:`${r.numero} ${r.nome}`, tipo, prev, real:rea});
-    });
-    if((real['Extra']||0)>0.0001) rows.push({nome:`${r.numero} ${r.nome}`, tipo:'Extra', prev:0, real:real['Extra']});
+    const realMdo = real['Mão de obra']||0, realMat = real['Material']||0, realEquip = real['Equipamento']||0, realExtra = real['Extra']||0;
+    const prevTotal = prevMdo+prevMat+prevEquip;
+    const realTotal = realMdo+realMat+realEquip+realExtra;
+    if(prevTotal<=0.0001 && realTotal<=0.0001) return;
+    const pct = prevTotal>0 ? (realTotal/prevTotal*100) : (realTotal>0?999:0);
+    rows.push({ nome:`${r.numero} ${r.nome}`, prevMdo, realMdo, prevMat, realMat, prevEquip, realEquip, realExtra, prevTotal, realTotal, pct });
   });
   return rows;
 }
@@ -1674,22 +2101,27 @@ function renderPrevRealizado(){
   const tbody = document.getElementById('tbodyPrevRealizado');
   if(tbody){
     tbody.innerHTML = rows.length ? rows.map(r=>{
-      const pct = r.prev>0 ? (r.real/r.prev*100) : (r.real>0?999:0);
-      const cls = pct>110?'crit':(pct>=90?'ok':'warn');
-      return `<tr><td>${escapeXml(r.nome)}</td><td>${r.tipo}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.prev,2)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.real,2)}</td><td class="num"><span class="badge ${cls}">${r.prev>0?fmtNum(pct,0)+'%':'-'}</span></td></tr>`;
-    }).join('') : `<tr><td colspan="5" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+      const cls = r.pct>110?'crit':(r.pct>=90?'ok':'warn');
+      const cell = (v)=>`<td class="num" style="font-family:var(--mono)">${v>0.0001?fmtNum(v,2):'—'}</td>`;
+      return `<tr><td>${escapeXml(r.nome)}</td>
+        ${cell(r.prevMdo)}${cell(r.realMdo)}
+        ${cell(r.prevMat)}${cell(r.realMat)}
+        ${cell(r.prevEquip)}${cell(r.realEquip)}
+        ${cell(r.realExtra)}
+        <td class="num"><span class="badge ${cls}">${r.prevTotal>0?fmtNum(r.pct,0)+'%':'-'}</span></td></tr>`;
+    }).join('') : `<tr><td colspan="9" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
   }
   const canvas = document.getElementById('chartPrevRealizado');
   if(prevRealChart){ prevRealChart.destroy(); prevRealChart=null; }
   if(!canvas || typeof Chart==='undefined' || rows.length===0) return;
-  const top = rows.slice().sort((a,b)=>(b.prev+b.real)-(a.prev+a.real)).slice(0,15);
+  const top = rows.slice().sort((a,b)=>(b.prevTotal+b.realTotal)-(a.prevTotal+a.realTotal)).slice(0,15);
   prevRealChart = new Chart(canvas.getContext('2d'), {
     type:'bar',
     data:{
-      labels: top.map(r=>truncate(r.nome,18)+' · '+r.tipo),
+      labels: top.map(r=>truncate(r.nome,22)),
       datasets:[
-        {label:'Previsto', data:top.map(r=>r.prev), backgroundColor:'#5b9dd9'},
-        {label:'Realizado', data:top.map(r=>r.real), backgroundColor:'#e8a33d'},
+        {label:'Previsto', data:top.map(r=>r.prevTotal), backgroundColor:'#5b9dd9'},
+        {label:'Realizado', data:top.map(r=>r.realTotal), backgroundColor:'#e8a33d'},
       ]
     },
     options:{
@@ -1827,7 +2259,7 @@ async function supaUpsertProject(row){
 async function supaDeleteProject(id){ return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'}); }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -1841,7 +2273,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -1859,6 +2291,12 @@ function applyProjectPayload(payload){
   bancos = payload.bancos || [];
   recebimentos = payload.recebimentos || [];
   nextRecebId = recebimentos.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
+  antecipacao = payload.antecipacao || {};
+  estoqueConsumos = payload.estoqueConsumos || [];
+  nextEstoqueConsumoId = estoqueConsumos.reduce((m,u)=>Math.max(m,u.id||0), 0) + 1;
+  composicoesProprias = payload.composicoesProprias || [];
+  nextComposicaoId = composicoesProprias.reduce((m,c)=>Math.max(m,c.id||0), 0) + 1;
+  compEditingId = null;
 }
 async function refreshProjectSelect(){
   const sel = document.getElementById('projectSelect');
@@ -1877,7 +2315,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -1888,7 +2326,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -1908,7 +2346,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -1918,7 +2356,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null;
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
 
@@ -1947,7 +2385,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }
@@ -2023,6 +2461,7 @@ function setupTopbar(){
   setupRecursosTab();
   setupComprasTab();
   setupFluxoCaixaTab();
+  setupComposicoesTab();
   setupGanttToggle();
   setupConfigTab();
   await loadSinapi();

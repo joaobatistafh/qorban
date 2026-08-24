@@ -35,6 +35,19 @@ let saldoObraChart = null;
 
 const TIPOS_COMPRA = ['Mão de obra','Material','Equipamento','Extra'];
 const FORMAS_PAGTO = ['PIX','Cartão de crédito','Cartão de débito','Espécie'];
+
+/* ---- quantitativos: alvenaria/muro ---- */
+let revestimentos = [];
+let nextRevestimentoId = 1;
+let alvenariaRows = [];
+let nextAlvenariaId = 1;
+let muroRows = [];
+let nextMuroId = 1;
+const REVEST_TIPOS = ['Tinta','Textura','Papel de parede','Revestimento/Pedra','Outro'];
+const SENTIDO_OPTIONS = ['Horizontal','Vertical'];
+const FACE_OPTIONS = ['Interno','Externo','Externo (parte interna da platibanda)','Banheiro','Cozinha'];
+const FACES_INTERNAS = ['Interno','Banheiro','Cozinha'];
+const FACES_EXTERNAS = ['Externo','Externo (parte interna da platibanda)'];
 const UNIDADES_COMPRA = ['ajuda de custo','balde','diária','g','kg','lata','litro','m','m2','m3','mensal','mil','produção','quinzenal','salário','semanal','ton','unid','vara','vb'];
 let antecipacao = {};
 let comprasPrevisaoPeriod = 'quinzena';
@@ -560,6 +573,7 @@ function renderAll(){
   try{ renderEstoque(); }catch(e){ console.error('Estoque:', e); }
   try{ renderFluxoCaixaAll(); }catch(e){ console.error('Fluxo de caixa:', e); }
   try{ renderComposicoes(); }catch(e){ console.error('Composições:', e); }
+  try{ renderAlvenariaAll(); }catch(e){ console.error('Quantitativos:', e); }
 }
 
 /* ============================================================
@@ -2230,6 +2244,277 @@ function setupFluxoCaixaTab(){
 }
 
 /* ============================================================
+   15d. QUANTITATIVOS — ALVENARIA / MURO
+   ============================================================ */
+function alvArea(r){ return round2((parseFloat(r.linear)||0)*(parseFloat(r.peDireito)||0)*(parseFloat(r.repeticoes)||0)); }
+function alvFundacaoVal(r){ return r.fundacao ? round2((parseFloat(r.linear)||0)*(parseFloat(r.repeticoes)||0)) : 0; }
+function muroArea(r){ return round2((parseFloat(r.linear)||0)*(parseFloat(r.peDireito)||0)); }
+function muroFundacaoVal(r){ return r.fundacao ? round2(parseFloat(r.linear)||0) : 0; }
+function revestTipo(nome){ const rv = revestimentos.find(r=>r.nome===nome); return rv ? rv.tipo : null; }
+function revestOptionsHtml(selected){
+  return `<option value="">—</option>` + revestimentos.map(r=>`<option value="${escapeAttr(r.nome)}" ${r.nome===selected?'selected':''}>${escapeXml(r.nome)} (${r.tipo})</option>`).join('');
+}
+function faceOptionsHtml(selected){
+  return FACE_OPTIONS.map(f=>`<option ${f===selected?'selected':''}>${f}</option>`).join('');
+}
+
+/* --- revestimentos --- */
+function revestimentoRowHtml(r){
+  return `<tr data-revest="${r.id}">
+    <td><input type="text" class="cell" data-rvf="nome" data-revest="${r.id}" value="${escapeAttr(r.nome)}" placeholder="Ex: Tinta - Cor branco neve / Fosco / Suvinil"></td>
+    <td><select class="cell" data-rvf="tipo" data-revest="${r.id}">${REVEST_TIPOS.map(t=>`<option ${t===r.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td><button class="icon-btn" data-revestremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function renderRevestimentos(){
+  const tbody = document.getElementById('tbodyRevestimentos');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyRevestimentos');
+  if(emptyEl) emptyEl.style.display = revestimentos.length ? 'none':'block';
+  tbody.innerHTML = revestimentos.map(revestimentoRowHtml).join('');
+  tbody.querySelectorAll('[data-rvf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const r = revestimentos.find(x=>String(x.id)===el.dataset.revest);
+      if(!r) return;
+      r[el.dataset.rvf] = el.value;
+      renderAlvenariaAll();
+      saveProject();
+    });
+  });
+  tbody.querySelectorAll('[data-revestremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const nome = revestimentos.find(r=>String(r.id)===btn.dataset.revestremove)?.nome;
+      revestimentos = revestimentos.filter(r=>String(r.id)!==btn.dataset.revestremove);
+      alvenariaRows.forEach(r=>{ if(r.acab1===nome) r.acab1=''; if(r.acab2===nome) r.acab2=''; });
+      muroRows.forEach(r=>{ if(r.acabExt===nome) r.acabExt=''; if(r.acabInt===nome) r.acabInt=''; });
+      renderAlvenariaAll();
+      saveProject();
+    });
+  });
+}
+function addRevestimento(){
+  revestimentos.push({id:nextRevestimentoId++, nome:'', tipo:'Tinta'});
+  renderRevestimentos();
+  saveProject();
+}
+
+/* --- alvenaria (paredes) --- */
+function alvenariaRowHtml(r){
+  const area = alvArea(r);
+  const fv = alvFundacaoVal(r);
+  return `<tr data-alv="${r.id}">
+    <td><input type="text" class="cell" data-af="local1" data-alv="${r.id}" value="${escapeAttr(r.local1)}"></td>
+    <td><input type="text" class="cell" data-af="local2" data-alv="${r.id}" value="${escapeAttr(r.local2)}"></td>
+    <td><select class="cell" data-af="sentido" data-alv="${r.id}">${SENTIDO_OPTIONS.map(s=>`<option ${s===r.sentido?'selected':''}>${s}</option>`).join('')}</select></td>
+    <td><input type="text" class="cell" data-af="pavimento" data-alv="${r.id}" value="${escapeAttr(r.pavimento)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-af="linear" data-alv="${r.id}" value="${fmtInput(r.linear)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-af="peDireito" data-alv="${r.id}" value="${fmtInput(r.peDireito)}"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-af="repeticoes" data-alv="${r.id}" value="${fmtInput(r.repeticoes)}"></td>
+    <td><select class="cell" data-af="face1" data-alv="${r.id}">${faceOptionsHtml(r.face1)}</select></td>
+    <td><select class="cell" data-af="acab1" data-alv="${r.id}">${revestOptionsHtml(r.acab1)}</select></td>
+    <td><select class="cell" data-af="face2" data-alv="${r.id}">${faceOptionsHtml(r.face2)}</select></td>
+    <td><select class="cell" data-af="acab2" data-alv="${r.id}">${revestOptionsHtml(r.acab2)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(area,2)}</td>
+    <td style="text-align:center;"><input type="checkbox" data-af="fundacao" data-alv="${r.id}" ${r.fundacao?'checked':''}></td>
+    <td><button class="icon-btn" data-alvremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindAlvenariaEvents(){
+  document.querySelectorAll('#tblAlvenaria [data-af]').forEach(el=>{
+    const ev = (el.type==='checkbox' || el.tagName==='SELECT') ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const r = alvenariaRows.find(x=>String(x.id)===el.dataset.alv);
+      if(!r) return;
+      const f = el.dataset.af;
+      if(f==='fundacao') r[f] = el.checked;
+      else if(['linear','peDireito','repeticoes'].includes(f)) r[f] = parseFloat(el.value)||0;
+      else r[f] = el.value;
+      if(['linear','peDireito','repeticoes','fundacao'].includes(f)){
+        const tr = el.closest('tr');
+        tr.children[11].textContent = fmtNum(alvArea(r),2);
+      }
+      renderAlvenariaTotals();
+      renderResumoAlvenaria();
+      saveProject();
+    });
+  });
+  document.querySelectorAll('[data-alvremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      alvenariaRows = alvenariaRows.filter(r=>String(r.id)!==btn.dataset.alvremove);
+      renderAlvenaria();
+      saveProject();
+    });
+  });
+}
+function renderAlvenaria(){
+  const tbody = document.getElementById('tbodyAlvenaria');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyAlvenaria');
+  if(emptyEl) emptyEl.style.display = alvenariaRows.length ? 'none':'block';
+  tbody.innerHTML = alvenariaRows.map(alvenariaRowHtml).join('');
+  bindAlvenariaEvents();
+  renderAlvenariaTotals();
+  renderResumoAlvenaria();
+}
+function renderAlvenariaTotals(){
+  const totalArea = alvenariaRows.reduce((s,r)=>s+alvArea(r),0);
+  const totalFund = alvenariaRows.reduce((s,r)=>s+alvFundacaoVal(r),0);
+  const elA = document.getElementById('alvenariaTotalArea');
+  const elF = document.getElementById('alvenariaTotalFundacao');
+  if(elA) elA.textContent = fmtNum(totalArea,2);
+  if(elF) elF.textContent = fmtNum(totalFund,2);
+  const meta = document.getElementById('qMetaAlvenaria');
+  if(meta) meta.textContent = `${alvenariaRows.length} parede(s) · ${fmtNum(totalArea,2)} m²`;
+}
+function addAlvenariaRow(){
+  alvenariaRows.push({id:nextAlvenariaId++, local1:'', local2:'', sentido:'Horizontal', pavimento:'Térreo', linear:0, peDireito:0, repeticoes:1, face1:'Externo', acab1:'', face2:'Interno', acab2:'', fundacao:false});
+  renderAlvenaria();
+  saveProject();
+}
+function computeResumoAlvenaria(){
+  let fundoInt=0, emassInt=0, pintInt=0, fundoExt=0;
+  alvenariaRows.forEach(r=>{
+    const area = alvArea(r);
+    if(area<=0) return;
+    [[r.face1,r.acab1],[r.face2,r.acab2]].forEach(([face,acab])=>{
+      if(!face || !acab) return;
+      const tipo = revestTipo(acab);
+      if(FACES_INTERNAS.includes(face)){
+        if(tipo==='Tinta'||tipo==='Textura') fundoInt += area;
+        if(tipo==='Tinta'){ emassInt += area; pintInt += area; }
+      } else if(FACES_EXTERNAS.includes(face)){
+        if(tipo==='Tinta'||tipo==='Textura') fundoExt += area;
+      }
+    });
+  });
+  return {fundoInt, emassInt, pintInt, fundoTeto:0, emassTeto:0, pintTeto:0, fundoExt};
+}
+function renderResumoAlvenaria(){
+  const tbody = document.getElementById('tbodyResumoAlvenaria');
+  if(!tbody) return;
+  const s = computeResumoAlvenaria();
+  const rows = [
+    ['Fundo selador em área interna', s.fundoInt],
+    ['Emassamento e lixamento de parede interna', s.emassInt],
+    ['Pintura em parede interna', s.pintInt],
+    ['Fundo selador em teto', s.fundoTeto, true],
+    ['Emassamento e lixamento de teto', s.emassTeto, true],
+    ['Pintura em teto', s.pintTeto, true],
+    ['Fundo selador em área externa', s.fundoExt],
+  ];
+  tbody.innerHTML = rows.map(([lbl,val,pendente])=>`<tr><td>${lbl}${pendente?' <span class="badge warn">calc. no Forro</span>':''}</td><td class="num">${fmtNum(val,2)} m²</td></tr>`).join('');
+}
+
+/* --- muro --- */
+function muroRowHtml(r){
+  const area = muroArea(r);
+  return `<tr data-muro="${r.id}">
+    <td><input type="text" class="cell" data-mf="local" data-muro="${r.id}" value="${escapeAttr(r.local)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-mf="linear" data-muro="${r.id}" value="${fmtInput(r.linear)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-mf="peDireito" data-muro="${r.id}" value="${fmtInput(r.peDireito)}"></td>
+    <td style="text-align:center;"><input type="checkbox" data-mf="chapiscoExt" data-muro="${r.id}" ${r.chapiscoExt?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-mf="chapiscoInt" data-muro="${r.id}" ${r.chapiscoInt?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-mf="rebocoExt" data-muro="${r.id}" ${r.rebocoExt?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-mf="rebocoInt" data-muro="${r.id}" ${r.rebocoInt?'checked':''}></td>
+    <td><select class="cell" data-mf="acabExt" data-muro="${r.id}">${revestOptionsHtml(r.acabExt)}</select></td>
+    <td><select class="cell" data-mf="acabInt" data-muro="${r.id}">${revestOptionsHtml(r.acabInt)}</select></td>
+    <td style="text-align:center;"><input type="checkbox" data-mf="fundacao" data-muro="${r.id}" ${r.fundacao?'checked':''}></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(area,2)}</td>
+    <td><button class="icon-btn" data-muroremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindMuroEvents(){
+  document.querySelectorAll('#tblMuro [data-mf]').forEach(el=>{
+    const ev = (el.type==='checkbox' || el.tagName==='SELECT') ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const r = muroRows.find(x=>String(x.id)===el.dataset.muro);
+      if(!r) return;
+      const f = el.dataset.mf;
+      if(f==='fundacao' || f==='chapiscoExt' || f==='chapiscoInt' || f==='rebocoExt' || f==='rebocoInt') r[f] = el.checked;
+      else if(['linear','peDireito'].includes(f)) r[f] = parseFloat(el.value)||0;
+      else r[f] = el.value;
+      if(['linear','peDireito'].includes(f)){
+        const tr = el.closest('tr');
+        tr.children[10].textContent = fmtNum(muroArea(r),2);
+      }
+      renderMuroTotals();
+      renderResumoMuro();
+      saveProject();
+    });
+  });
+  document.querySelectorAll('[data-muroremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      muroRows = muroRows.filter(r=>String(r.id)!==btn.dataset.muroremove);
+      renderMuro();
+      saveProject();
+    });
+  });
+}
+function renderMuro(){
+  const tbody = document.getElementById('tbodyMuro');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyMuro');
+  if(emptyEl) emptyEl.style.display = muroRows.length ? 'none':'block';
+  tbody.innerHTML = muroRows.map(muroRowHtml).join('');
+  bindMuroEvents();
+  renderMuroTotals();
+  renderResumoMuro();
+}
+function renderMuroTotals(){
+  const totalArea = muroRows.reduce((s,r)=>s+muroArea(r),0);
+  const totalFund = muroRows.reduce((s,r)=>s+muroFundacaoVal(r),0);
+  const elA = document.getElementById('muroTotalArea');
+  const elF = document.getElementById('muroTotalFundacao');
+  if(elA) elA.textContent = fmtNum(totalArea,2);
+  if(elF) elF.textContent = fmtNum(totalFund,2);
+}
+function addMuroRow(){
+  muroRows.push({id:nextMuroId++, local:'', linear:0, peDireito:0, chapiscoExt:false, chapiscoInt:false, rebocoExt:false, rebocoInt:false, acabExt:'', acabInt:'', fundacao:false});
+  renderMuro();
+  saveProject();
+}
+function computeResumoMuro(){
+  let fundacao=0, chapiscoExt=0, rebocoExt=0, fundoExt=0, chapiscoInt=0, rebocoInt=0, fundoInt=0;
+  muroRows.forEach(r=>{
+    const area = muroArea(r);
+    fundacao += muroFundacaoVal(r);
+    if(r.chapiscoExt) chapiscoExt += area;
+    if(r.rebocoExt) rebocoExt += area;
+    if(r.acabExt){ const t=revestTipo(r.acabExt); if(t==='Tinta'||t==='Textura') fundoExt += area; }
+    if(r.chapiscoInt) chapiscoInt += area;
+    if(r.rebocoInt) rebocoInt += area;
+    if(r.acabInt){ const t=revestTipo(r.acabInt); if(t==='Tinta'||t==='Textura') fundoInt += area; }
+  });
+  return {fundacao, chapiscoExt, rebocoExt, fundoExt, chapiscoInt, rebocoInt, fundoInt};
+}
+function renderResumoMuro(){
+  const tbody = document.getElementById('tbodyResumoMuro');
+  if(!tbody) return;
+  const s = computeResumoMuro();
+  const rows = [
+    ['Fundação', s.fundacao, 'm'],
+    ['Chapisco externo', s.chapiscoExt, 'm²'],
+    ['Reboco externo', s.rebocoExt, 'm²'],
+    ['Fundo selador externo', s.fundoExt, 'm²'],
+    ['Chapisco interno', s.chapiscoInt, 'm²'],
+    ['Reboco interno', s.rebocoInt, 'm²'],
+    ['Fundo selador interno', s.fundoInt, 'm²'],
+  ];
+  tbody.innerHTML = rows.map(([lbl,val,unit])=>`<tr><td>${lbl}</td><td class="num">${fmtNum(val,2)} ${unit}</td></tr>`).join('');
+}
+
+function renderAlvenariaAll(){
+  renderRevestimentos();
+  renderAlvenaria();
+  renderMuro();
+}
+function setupQuantitativosTab(){
+  document.getElementById('btnAddRevestimento').addEventListener('click', addRevestimento);
+  document.getElementById('btnAddAlvenaria').addEventListener('click', addAlvenariaRow);
+  document.getElementById('btnAddMuro').addEventListener('click', addMuroRow);
+}
+
+/* ============================================================
    16. PERSISTÊNCIA (Supabase)
    ============================================================ */
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
@@ -2259,7 +2544,7 @@ async function supaUpsertProject(row){
 async function supaDeleteProject(id){ return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'}); }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -2273,7 +2558,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -2297,6 +2582,12 @@ function applyProjectPayload(payload){
   composicoesProprias = payload.composicoesProprias || [];
   nextComposicaoId = composicoesProprias.reduce((m,c)=>Math.max(m,c.id||0), 0) + 1;
   compEditingId = null;
+  revestimentos = payload.revestimentos || [];
+  nextRevestimentoId = revestimentos.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
+  alvenariaRows = payload.alvenariaRows || [];
+  nextAlvenariaId = alvenariaRows.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
+  muroRows = payload.muroRows || [];
+  nextMuroId = muroRows.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
 }
 async function refreshProjectSelect(){
   const sel = document.getElementById('projectSelect');
@@ -2315,7 +2606,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -2326,7 +2617,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -2346,7 +2637,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -2356,7 +2647,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1;
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
 
@@ -2385,7 +2676,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }
@@ -2462,6 +2753,7 @@ function setupTopbar(){
   setupComprasTab();
   setupFluxoCaixaTab();
   setupComposicoesTab();
+  setupQuantitativosTab();
   setupGanttToggle();
   setupConfigTab();
   await loadSinapi();

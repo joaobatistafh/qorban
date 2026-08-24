@@ -254,6 +254,24 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .toast.show{opacity:1;transform:translateY(0);}
 .footer-note{color:var(--text-faint);font-size:11px;text-align:center;margin-top:24px;font-family:var(--mono);}
 
+details.qitem{background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;}
+details.qitem[open] summary.qitem-summary{border-bottom:1px solid var(--line);}
+summary.qitem-summary{cursor:pointer;padding:15px 20px;font-family:var(--disp);font-size:15px;font-weight:600;list-style:none;display:flex;align-items:center;gap:10px;user-select:none;}
+summary.qitem-summary::-webkit-details-marker{display:none;}
+summary.qitem-summary .chev{transition:transform .15s;color:var(--accent);font-size:11px;flex:none;}
+details.qitem[open] summary.qitem-summary .chev{transform:rotate(90deg);}
+summary.qitem-summary .qitem-meta{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-faint);font-weight:500;text-transform:none;}
+.qitem-body{padding:4px 20px 20px;}
+.qsection{padding:18px 0;border-bottom:1px solid var(--line-soft);}
+.qsection:last-child{border-bottom:none;padding-bottom:0;}
+.qsection h3{font-family:var(--disp);font-size:12.5px;margin:0 0 4px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px;}
+.qsection h3 .tag{font-family:var(--mono);font-size:9px;color:var(--accent);border:1px solid var(--accent-dim);padding:1px 5px;border-radius:2px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;}
+.qsection .desc{color:var(--text-faint);font-size:11.5px;margin:0 0 12px;line-height:1.5;}
+table.qtbl input.cell, table.qtbl select.cell{font-size:11.5px;padding:4px 6px;}
+table.qtbl th, table.qtbl td{white-space:nowrap;}
+.resumo-tbl td:first-child{color:var(--text-dim);}
+.resumo-tbl td.num{font-family:var(--mono);color:var(--accent);font-weight:600;}
+
 .modal-overlay{position:fixed;inset:0;background:rgba(10,12,15,0.65);display:flex;align-items:center;justify-content:center;z-index:2000;}
 .modal-box{background:var(--bg-panel-raised);border:1px solid var(--line);border-radius:4px;padding:22px 24px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
 .modal-box h3{font-family:var(--disp);font-size:16px;margin:0 0 8px;}
@@ -821,10 +839,105 @@ tr[draggable="true"]{cursor:default;}
         </div>
       </div>
       <div class="panel" id="panel-quantitativos">
-        <div class="placeholder-panel">
-          <div class="big">Quantitativos</div>
-          <p>Realização do cálculo da quantidade de cada subitem do orçamento.</p>
+        <div class="card">
+          <h2><span class="tag">quantitativos</span>Levantamento de quantidades</h2>
+          <p class="desc">Cada item da obra é uma seção independente, em formato de lista expansível. Preencha os dados de campo e as áreas/quantidades são calculadas automaticamente, alimentando os resumos de serviços (pintura, chapisco, reboco etc.).</p>
         </div>
+
+        <details class="qitem" open>
+          <summary class="qitem-summary"><span class="chev">▸</span> 1. Alvenaria <span class="qitem-meta" id="qMetaAlvenaria"></span></summary>
+          <div class="qitem-body">
+
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">acabamentos</span>Revestimentos / Tinta / Textura</h3>
+                <button class="btn small primary" id="btnAddRevestimento">+ Adicionar acabamento</button>
+              </div>
+              <p class="desc">Cadastre aqui cada acabamento (tinta, textura, papel de parede, revestimento/pedra etc). Eles aparecem como opção em "Acabamento" nas tabelas abaixo. O "Tipo" define quais serviços de resumo (fundo selador, emassamento, pintura) a área desse acabamento vai gerar.</p>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblRevestimentos">
+                <thead><tr><th style="min-width:220px;">Nome / descrição</th><th style="width:170px;">Tipo</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyRevestimentos"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyRevestimentos" style="display:none;padding:20px;">Nenhum acabamento cadastrado ainda.</div>
+            </div>
+
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">alvenaria</span>Paredes</h3>
+                <button class="btn small primary" id="btnAddAlvenaria">+ Adicionar linha</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblAlvenaria">
+                <thead><tr>
+                  <th style="min-width:110px;">Local/Lado 1</th>
+                  <th style="min-width:110px;">Local/Lado 2</th>
+                  <th style="width:100px;">Sentido</th>
+                  <th style="min-width:100px;">Pavimento</th>
+                  <th style="width:90px;" class="num">Linear/perím. (m)</th>
+                  <th style="width:80px;" class="num">Pé direito (m)</th>
+                  <th style="width:70px;" class="num">Repetições</th>
+                  <th style="width:150px;">Face 1</th>
+                  <th style="min-width:160px;">Acabamento (face 1)</th>
+                  <th style="width:150px;">Face 2</th>
+                  <th style="min-width:160px;">Acabamento (face 2)</th>
+                  <th style="width:90px;" class="num">Área (m²)</th>
+                  <th style="width:60px;text-align:center;">Fund.?</th>
+                  <th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyAlvenaria"></tbody>
+                <tfoot><tr style="font-weight:600;background:var(--bg-inset);">
+                  <td colspan="11" style="text-align:right;padding:8px 10px;">TOTAL</td>
+                  <td class="num" id="alvenariaTotalArea" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;"></td>
+                  <td class="num" id="alvenariaTotalFundacao" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;"></td>
+                  <td></td>
+                </tr></tfoot>
+              </table></div>
+              <div class="empty-state" id="emptyAlvenaria" style="display:none;padding:20px;">Nenhuma parede cadastrada ainda.</div>
+            </div>
+
+            <div class="qsection">
+              <h3><span class="tag">resumo</span>Resumo — Alvenaria</h3>
+              <p class="desc">Calculado a partir das faces internas/externas e do tipo de acabamento (tinta ou textura) de cada parede.</p>
+              <div class="tbl-wrap"><table class="resumo-tbl"><tbody id="tbodyResumoAlvenaria"></tbody></table></div>
+            </div>
+
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">muro</span>Muro</h3>
+                <button class="btn small primary" id="btnAddMuro">+ Adicionar linha</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblMuro">
+                <thead><tr>
+                  <th style="min-width:120px;">Local</th>
+                  <th style="width:100px;" class="num">Linear/perím. (m)</th>
+                  <th style="width:90px;" class="num">Pé direito (m)</th>
+                  <th style="width:60px;text-align:center;">Chapisco ext.</th>
+                  <th style="width:60px;text-align:center;">Chapisco int.</th>
+                  <th style="width:60px;text-align:center;">Reboco ext.</th>
+                  <th style="width:60px;text-align:center;">Reboco int.</th>
+                  <th style="min-width:150px;">Acabamento ext.</th>
+                  <th style="min-width:150px;">Acabamento int.</th>
+                  <th style="width:60px;text-align:center;">Fund.?</th>
+                  <th style="width:90px;" class="num">Área (m²)</th>
+                  <th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyMuro"></tbody>
+                <tfoot><tr style="font-weight:600;background:var(--bg-inset);">
+                  <td colspan="9" style="text-align:right;padding:8px 10px;">TOTAL</td>
+                  <td class="num" id="muroTotalFundacao" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;"></td>
+                  <td class="num" id="muroTotalArea" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;"></td>
+                  <td></td>
+                </tr></tfoot>
+              </table></div>
+              <div class="empty-state" id="emptyMuro" style="display:none;padding:20px;">Nenhum muro cadastrado ainda.</div>
+            </div>
+
+            <div class="qsection">
+              <h3><span class="tag">resumo</span>Resumo — Muro</h3>
+              <div class="tbl-wrap"><table class="resumo-tbl"><tbody id="tbodyResumoMuro"></tbody></table></div>
+            </div>
+
+          </div>
+        </details>
       </div>
 
       <!-- ===================== CONFIGURAÇÃO ===================== -->

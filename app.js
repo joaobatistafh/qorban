@@ -25,7 +25,6 @@ let compras = [];
 let nextCompraId = 1;
 let recebimentos = [];
 let nextRecebId = 1;
-let bancos = [];
 let fcxPeriod = 'quinzena';
 let recPeriod = {mdo:'quinzena', mat:'quinzena', equip:'quinzena'};
 let recCharts = {mdo:null, mat:null, equip:null};
@@ -1543,7 +1542,7 @@ function compraRowHtml(c){
     <td><input type="text" class="cell" data-cf="notaNum" data-compra="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
     <td><select class="cell" data-cf="formaPagto" data-compra="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
     <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cf="parcelas" data-compra="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
-    <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${bancos.map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
+    <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
     <td><input type="text" class="cell" data-cf="descricao" data-compra="${c.id}" value="${escapeAttr(c.descricao)}"></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="quantidade" data-compra="${c.id}" value="${fmtInput(c.quantidade)}"></td>
     <td><select class="cell" style="width:78px;" data-cf="unidade" data-compra="${c.id}">
@@ -1552,6 +1551,13 @@ function compraRowHtml(c){
     </select></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="valorUnid" data-compra="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
     <td class="num" style="font-family:var(--mono);color:var(--accent)" data-comprtotal="${c.id}">R$ ${fmtNum(c.valorTotal,2)}</td>
+    <td>
+      <select class="cell" data-cf="entrega" data-compra="${c.id}" style="margin-bottom:${c.entrega==='Entrega prevista'?'4px':'0'};">
+        <option ${c.entrega==='Recebido'||!c.entrega?'selected':''}>Recebido</option>
+        <option ${c.entrega==='Entrega prevista'?'selected':''}>Entrega prevista</option>
+      </select>
+      ${c.entrega==='Entrega prevista' ? `<input type="date" class="cell" data-cf="dataEntregaPrevista" data-compra="${c.id}" value="${c.dataEntregaPrevista||''}">` : ''}
+    </td>
     <td><button class="icon-btn" data-comprremove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
 }
@@ -1585,7 +1591,7 @@ function bindComprasEvents(){
         c[f] = el.value;
       }
       saveProject();
-      if(f==='formaPagto'){ renderCompras(); return; }
+      if(f==='formaPagto' || f==='entrega'){ renderCompras(); return; }
       renderComprasStats();
       renderFluxoCaixaAll();
     });
@@ -1612,13 +1618,14 @@ function renderComprasStats(){
 function renderBancosChips(){
   const wrap = document.getElementById('bancosChips');
   if(!wrap) return;
-  wrap.innerHTML = bancos.length ? bancos.map(b=>`<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(b)}<button class="icon-btn" style="padding:0;" data-bancoremove="${escapeAttr(b)}" title="Remover conta">✕</button></span>`).join('') : '<span class="hint">Nenhuma conta cadastrada ainda.</span>';
+  const lista = sistemaGlobal.bancos || [];
+  wrap.innerHTML = lista.length ? lista.map(b=>`<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(b)}<button class="icon-btn" style="padding:0;" data-bancoremove="${escapeAttr(b)}" title="Remover conta">✕</button></span>`).join('') : '<span class="hint">Nenhuma conta cadastrada ainda.</span>';
   wrap.querySelectorAll('[data-bancoremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      bancos = bancos.filter(b=>b!==btn.dataset.bancoremove);
+      sistemaGlobal.bancos = (sistemaGlobal.bancos||[]).filter(b=>b!==btn.dataset.bancoremove);
       renderBancosChips();
       renderCompras();
-      saveProject();
+      saveSistemaGlobal();
     });
   });
 }
@@ -1634,7 +1641,7 @@ function renderCompras(){
   renderPrevisaoCompras();
 }
 function addCompra(){
-  compras.push({id:nextCompraId++, orcId:null, tipo:'Material', data:toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0});
+  compras.push({id:nextCompraId++, orcId:null, tipo:'Material', data:toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0, entrega:'Recebido', dataEntregaPrevista:''});
   renderCompras();
   renderFluxoCaixaAll();
   saveProject();
@@ -1642,10 +1649,11 @@ function addCompra(){
 function addBanco(){
   const nome = (prompt('Nome da conta/banco:')||'').trim();
   if(!nome) return;
-  if(!bancos.includes(nome)) bancos.push(nome);
+  sistemaGlobal.bancos = sistemaGlobal.bancos || [];
+  if(!sistemaGlobal.bancos.includes(nome)) sistemaGlobal.bancos.push(nome);
   renderBancosChips();
   renderCompras();
-  saveProject();
+  saveSistemaGlobal();
 }
 function computeComprasPrevisaoRows(){
   const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.breakdown);
@@ -1731,7 +1739,6 @@ function setPrevCompPeriod(p){
 }
 function setupComprasTab(){
   document.getElementById('btnAddCompra').addEventListener('click', addCompra);
-  document.getElementById('btnAddBanco').addEventListener('click', addBanco);
   document.getElementById('btnPrevCompSemana').addEventListener('click', ()=>setPrevCompPeriod('semana'));
   document.getElementById('btnPrevCompQuinzena').addEventListener('click', ()=>setPrevCompPeriod('quinzena'));
   document.getElementById('btnPrevCompMes').addEventListener('click', ()=>setPrevCompPeriod('mes'));
@@ -2634,23 +2641,69 @@ let nextDiarioId = 1;
 let nextDiarioSubId = 1;
 
 function efetivoRowHtml(entryId, r){
-  return `<tr data-diario="${entryId}" data-efrow="${r.id}">
-    <td><select class="cell" data-ef="funcao" data-diario="${entryId}" data-efrow="${r.id}">${funcaoOperarioOptionsHtml(r.funcao)}</select></td>
-    <td class="num"><input type="number" step="1" class="cell small nospin" data-ef="qtd" data-diario="${entryId}" data-efrow="${r.id}" value="${r.qtd||0}"></td>
-    <td><button class="icon-btn" data-efremove="${r.id}" data-diario="${entryId}" title="Remover">✕</button></td>
+  const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(r.funcionarioId));
+  const nome = f ? f.nome : '(funcionário removido)';
+  const funcao = f ? f.funcao : '';
+  const presente = r.manha || r.tarde;
+  return `<tr data-diario="${entryId}" data-efrow="${r.funcionarioId}">
+    <td>${escapeXml(nome)}</td>
+    <td>${escapeXml(funcao)}</td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="manha" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.manha?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="tarde" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.tarde?'checked':''}></td>
+    <td style="text-align:center;"><span class="badge ${presente?'ok':'warn'}">${presente?'Presente':'Falta'}</span></td>
   </tr>`;
+}
+function efetivoResumoHtml(e){
+  const presentes = (e.efetivo||[]).filter(r=>r.manha||r.tarde);
+  const porFuncao = {};
+  presentes.forEach(r=>{
+    const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(r.funcionarioId));
+    const funcao = f ? f.funcao : '(sem função)';
+    porFuncao[funcao] = (porFuncao[funcao]||0)+1;
+  });
+  const linhas = Object.entries(porFuncao).sort((a,b)=>b[1]-a[1]);
+  return `<table class="resumo-tbl" style="margin-top:10px;max-width:340px;"><tbody>
+    ${linhas.length ? linhas.map(([f,q])=>`<tr><td>${escapeXml(f)}</td><td class="num">${q}</td></tr>`).join('') : `<tr><td style="color:var(--text-faint);">Nenhum funcionário presente ainda</td></tr>`}
+    <tr style="font-weight:600;"><td>TOTAL</td><td class="num">${presentes.length}</td></tr>
+  </tbody></table>`;
+}
+function syncEfetivoDoDia(entry){
+  entry.efetivo = entry.efetivo || [];
+  const ativos = sistemaGlobal.funcionarios.filter(f=>String(f.obraId)===String(currentProjectId));
+  ativos.forEach(f=>{
+    if(!entry.efetivo.some(r=>String(r.funcionarioId)===String(f.id))){
+      entry.efetivo.push({funcionarioId:f.id, manha:false, tarde:false});
+    }
+  });
+}
+function entregasPrevistasHtml(){
+  const pendentes = compras.filter(c=>c.entrega==='Entrega prevista');
+  if(!pendentes.length) return '<p class="hint" style="margin-top:10px;">Nenhuma entrega prevista pendente para esta obra.</p>';
+  return `<div style="margin-top:14px;">
+    <h4 style="font-family:var(--disp);font-size:11.5px;margin:0 0 8px;color:var(--text-dim);">Entregas previstas da obra</h4>
+    <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item/Descrição</th><th style="width:100px;" class="num">Qtd.</th><th style="width:110px;">Previsão</th><th style="width:90px;text-align:center;">Recebido?</th></tr></thead>
+    <tbody>${pendentes.map(c=>`<tr><td>${escapeXml(c.descricao||c.loja||'(sem descrição)')}</td><td class="num">${fmtNum(c.quantidade,2)} ${escapeXml(c.unidade||'')}</td><td>${c.dataEntregaPrevista?fmtDate(c.dataEntregaPrevista):'—'}</td><td style="text-align:center;"><input type="checkbox" data-diarioentregarecebida="${c.id}"></td></tr>`).join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+function statusAtividadesRowHtml(entryId, subitem, status){
+  return `<tr><td>${escapeXml((subitem.numero||'')+' '+(subitem.nome||''))}</td><td><select class="cell" data-statusact="${subitem.id}" data-diario="${entryId}">
+    <option value="" ${!status?'selected':''}>—</option>
+    <option value="Em andamento" ${status==='Em andamento'?'selected':''}>Em andamento</option>
+    <option value="Concluída" ${status==='Concluída'?'selected':''}>Concluída</option>
+  </select></td></tr>`;
 }
 function materialRowHtml(entryId, listName, r){
   return `<tr data-diario="${entryId}" data-matrow="${r.id}">
     <td><input type="text" class="cell" data-mat="item" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.item)}"></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-mat="qtd" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${r.qtd||0}"></td>
-    <td><input type="text" class="cell" style="width:60px;" data-mat="unid" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.unid)}"></td>
+    <td><select class="cell" data-mat="unid" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}"><option value="">—</option>${UNIDADES_COMPRA.map(u=>`<option ${u===r.unid?'selected':''}>${u}</option>`).join('')}</select></td>
     <td><input type="text" class="cell" data-mat="obs" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.obs)}"></td>
     <td><button class="icon-btn" data-matremove="${r.id}" data-matlist="${listName}" data-diario="${entryId}" title="Remover">✕</button></td>
   </tr>`;
 }
 function diarioEntryHtml(e, isOpen){
-  const totalEfetivo = (e.efetivo||[]).reduce((s,r)=>s+(parseInt(r.qtd)||0),0);
+  const totalEfetivo = (e.efetivo||[]).filter(r=>r.manha||r.tarde).length;
   return `<details class="qitem" data-diarioentry="${e.id}" ${isOpen?'open':''}>
     <summary class="qitem-summary"><span class="chev">▸</span> Diário nº ${e.numero} — ${e.data?fmtDate(e.data):'(sem data)'} <span class="qitem-meta">${totalEfetivo} funcionário(s) em campo</span>
       <button class="icon-btn" data-diarioremove="${e.id}" title="Remover registro" style="margin-left:8px;">✕</button>
@@ -2669,25 +2722,33 @@ function diarioEntryHtml(e, isOpen){
         </div>
       </div>
       <div class="qsection">
-        <div class="toolbar-row"><h3><span class="tag">efetivo</span>Efetivo do dia (funcionários por função)</h3><button class="btn small primary" data-diarioaddefetivo="${e.id}">+ Adicionar</button></div>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Função</th><th class="num" style="width:100px;">Quantidade</th><th style="width:34px;"></th></tr></thead>
+        <h3><span class="tag">efetivo</span>Efetivo do dia (presença)</h3>
+        <p class="desc">Lista automática com os funcionários ativos nesta obra (cadastrados em "Funcionários"). Marque manhã e/ou tarde para registrar presença — se nenhum for marcado, conta como falta.</p>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Nome</th><th style="width:170px;">Função</th><th style="width:70px;text-align:center;">Manhã</th><th style="width:70px;text-align:center;">Tarde</th><th style="width:100px;text-align:center;">Situação</th></tr></thead>
           <tbody>${(e.efetivo||[]).map(r=>efetivoRowHtml(e.id,r)).join('')}</tbody>
-          <tfoot><tr style="font-weight:600;background:var(--bg-inset);"><td style="text-align:right;padding:8px 10px;">TOTAL</td><td class="num" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;">${totalEfetivo}</td><td></td></tr></tfoot>
         </table></div>
+        ${!(e.efetivo||[]).length ? '<p class="hint" style="margin-top:8px;">Nenhum funcionário cadastrado para esta obra ainda — cadastre em "Funcionários".</p>' : ''}
+        <h4 style="font-family:var(--disp);font-size:11.5px;margin:14px 0 6px;color:var(--text-dim);">Resumo por função</h4>
+        ${efetivoResumoHtml(e)}
       </div>
       <div class="qsection">
         <h3><span class="tag">atividades</span>Atividades realizadas</h3>
         <textarea class="cell" style="width:100%;min-height:80px;font-family:var(--sans);" data-df="atividades" data-diario="${e.id}" placeholder="Descreva as atividades executadas no dia...">${escapeXml(e.atividades)}</textarea>
-      </div>
-      <div class="qsection">
-        <div class="toolbar-row"><h3><span class="tag">materiais</span>Entrada de materiais</h3><button class="btn small primary" data-diarioaddentrada="${e.id}">+ Adicionar</button></div>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:70px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
-          <tbody>${(e.entradaMateriais||[]).map(r=>materialRowHtml(e.id,'entradaMateriais',r)).join('')}</tbody>
+        <h4 style="font-family:var(--disp);font-size:11.5px;margin:14px 0 6px;color:var(--text-dim);">Status dos subitens do orçamento (fim do dia)</h4>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Subitem</th><th style="width:170px;">Status</th></tr></thead>
+          <tbody>${orcamento.filter(r=>r.level==='subitem').map(s=>statusAtividadesRowHtml(e.id, s, (e.statusAtividades||{})[s.id])).join('') || '<tr><td colspan="2" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhum subitem no orçamento ainda.</td></tr>'}</tbody>
         </table></div>
       </div>
       <div class="qsection">
+        <div class="toolbar-row"><h3><span class="tag">materiais</span>Entrada de materiais</h3><button class="btn small primary" data-diarioaddentrada="${e.id}">+ Adicionar</button></div>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:90px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.entradaMateriais||[]).map(r=>materialRowHtml(e.id,'entradaMateriais',r)).join('')}</tbody>
+        </table></div>
+        ${entregasPrevistasHtml()}
+      </div>
+      <div class="qsection">
         <div class="toolbar-row"><h3><span class="tag">materiais</span>Saída de materiais</h3><button class="btn small primary" data-diarioaddsaida="${e.id}">+ Adicionar</button></div>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:70px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:90px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
           <tbody>${(e.saidaMateriais||[]).map(r=>materialRowHtml(e.id,'saidaMateriais',r)).join('')}</tbody>
         </table></div>
       </div>
@@ -2718,42 +2779,34 @@ function bindDiarioEvents(){
       renderDiario(); saveProject();
     });
   });
-  wrap.querySelectorAll('[data-diarioaddefetivo]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diarioaddefetivo);
-      if(!entry) return;
-      entry.efetivo = entry.efetivo||[];
-      entry.efetivo.push({id: nextDiarioSubId++, funcao: allFuncoesOperario()[0]||'', qtd:1});
-      renderDiario(); saveProject();
-    });
-  });
-  wrap.querySelectorAll('[data-efremove]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diario);
-      if(!entry) return;
-      entry.efetivo = (entry.efetivo||[]).filter(r=>String(r.id)!==btn.dataset.efremove);
-      renderDiario(); saveProject();
-    });
-  });
   wrap.querySelectorAll('[data-ef]').forEach(el=>{
     el.addEventListener('change', ()=>{
       const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
       if(!entry) return;
-      const row = (entry.efetivo||[]).find(r=>String(r.id)===el.dataset.efrow);
+      const row = (entry.efetivo||[]).find(r=>String(r.funcionarioId)===el.dataset.efrow);
       if(!row) return;
-      if(el.dataset.ef==='funcao' && el.value==='__add_funcao_op__'){
-        const novo = (prompt('Nome da nova função:')||'').trim();
-        if(novo){
-          sistemaGlobal.funcoesOperarioCustom = sistemaGlobal.funcoesOperarioCustom || [];
-          if(!allFuncoesOperario().includes(novo)) sistemaGlobal.funcoesOperarioCustom.push(novo);
-          row.funcao = novo;
-          saveSistemaGlobal();
-        }
-        renderDiario(); saveProject();
-        return;
-      }
-      row[el.dataset.ef] = el.dataset.ef==='qtd' ? (parseInt(el.value)||0) : el.value;
+      row[el.dataset.ef] = el.checked;
       renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-statusact]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
+      if(!entry) return;
+      entry.statusAtividades = entry.statusAtividades || {};
+      entry.statusAtividades[el.dataset.statusact] = el.value;
+      saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diarioentregarecebida]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      if(!el.checked) return;
+      const c = compras.find(x=>String(x.id)===el.dataset.diarioentregarecebida);
+      if(!c) return;
+      c.entrega = 'Recebido';
+      renderDiario();
+      renderCompras();
+      saveProject();
     });
   });
   wrap.querySelectorAll('[data-diarioaddentrada]').forEach(btn=>{
@@ -2797,6 +2850,7 @@ function bindDiarioEvents(){
 function renderDiario(){
   const wrap = document.getElementById('diarioEntriesWrap');
   if(!wrap) return;
+  diarioObra.forEach(syncEfetivoDoDia);
   const openIds = new Set();
   wrap.querySelectorAll('details.qitem[open]').forEach(d=>openIds.add(d.dataset.diarioentry));
   const emptyEl = document.getElementById('emptyDiario');
@@ -2806,11 +2860,13 @@ function renderDiario(){
   bindDiarioEvents();
 }
 function addDiarioEntry(){
-  diarioObra.push({
+  const entry = {
     id: nextDiarioId++, numero: diarioObra.length+1, data: toISO(new Date()),
     climaManha:'Bom', climaTarde:'Bom', climaNoite:'Bom', responsavel:'',
-    efetivo:[], atividades:'', entradaMateriais:[], saidaMateriais:[], ocorrencias:'',
-  });
+    efetivo:[], atividades:'', entradaMateriais:[], saidaMateriais:[], ocorrencias:'', statusAtividades:{},
+  };
+  syncEfetivoDoDia(entry);
+  diarioObra.push(entry);
   renderDiario(); saveProject();
 }
 function setupDiarioTab(){
@@ -2821,7 +2877,7 @@ function setupDiarioTab(){
    16. EMPRESA — ESCRITÓRIO / PATRIMÔNIO / ACESSOS / CONSOLIDAÇÃO
    (dados globais da empresa, compartilhados entre todas as obras)
    ============================================================ */
-let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[] };
+let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[] };
 let nextEscDescricaoId = 1;
 let nextEscCustoId = 1;
 let nextPatrimonioId = 1;
@@ -2848,7 +2904,7 @@ const FUNCOES_OPERARIO_BASE = [
 ];
 const CLIMA_OPCOES = ['Bom','Nublado','Chuvoso','Impraticável'];
 
-const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[]};
+const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[]};
 let nextFuncionarioId = 1;
 let obrasCache = [];
 
@@ -2895,6 +2951,7 @@ async function loadSistemaGlobal(){
   saveSistemaGlobal();
 }
 function renderEmpresaAll(){
+  try{ renderBancosChips(); }catch(e){ console.error('Bancos:', e); }
   try{ renderEscDescricoes(); renderEscCustos(); }catch(e){ console.error('Escritório:', e); }
   try{ renderPatrimonio(); }catch(e){ console.error('Patrimônio:', e); }
   try{ renderColaboradores(); }catch(e){ console.error('Acessos:', e); }
@@ -2926,11 +2983,14 @@ function escDescOptionsHtml(selected){
   return `<option value="">—</option>` + sistemaGlobal.escritorioDescricoes.map(d=>`<option ${d.nome===selected?'selected':''}>${escapeXml(d.nome)}</option>`).join('');
 }
 function escCustoRowHtml(c){
+  const showParc = c.formaPagto==='Cartão de crédito';
   return `<tr data-esccusto="${c.id}">
     <td><input type="date" class="cell" data-ecf="data" data-esccusto="${c.id}" value="${c.data||''}"></td>
-    <td><select class="cell" data-ecf="descricao" data-esccusto="${c.id}">${escDescOptionsHtml(c.descricao)}</select></td>
+    <td><select class="cell" data-ecf="item" data-esccusto="${c.id}">${escDescOptionsHtml(c.item)}</select></td>
+    <td><input type="text" class="cell" data-ecf="descricao" data-esccusto="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição livre"></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ecf="valor" data-esccusto="${c.id}" value="${fmtInput(c.valor)}"></td>
     <td><select class="cell" data-ecf="formaPagto" data-esccusto="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
+    <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-ecf="parcelas" data-esccusto="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
     <td><button class="icon-btn" data-esccustoremove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
 }
@@ -2945,8 +3005,13 @@ function renderEscCustos(){
       const c = sistemaGlobal.escritorioCustos.find(x=>String(x.id)===el.dataset.esccusto);
       if(!c) return;
       const f = el.dataset.ecf;
-      c[f] = f==='valor' ? (parseFloat(el.value)||0) : el.value;
-      renderEscCustosStats(); saveSistemaGlobal();
+      if(f==='valor') c[f] = parseFloat(el.value)||0;
+      else if(f==='parcelas') c[f] = Math.max(1, parseInt(el.value,10)||1);
+      else c[f] = el.value;
+      saveSistemaGlobal();
+      if(f==='formaPagto'){ renderEscCustos(); return; }
+      renderEscCustosStats();
+      renderResumoEscCustos();
     });
   });
   tbody.querySelectorAll('[data-esccustoremove]').forEach(btn=>{
@@ -2956,6 +3021,7 @@ function renderEscCustos(){
     });
   });
   renderEscCustosStats();
+  renderResumoEscCustos();
 }
 function renderEscCustosStats(){
   const strip = document.getElementById('escCustosStatsStrip');
@@ -2969,8 +3035,34 @@ function renderEscCustosStats(){
     <div class="stat"><div class="lbl">Registros</div><div class="val">${sistemaGlobal.escritorioCustos.length}</div></div>
   `;
 }
+function renderResumoEscCustos(){
+  const thead = document.getElementById('theadResumoEscCustos');
+  const tbody = document.getElementById('tbodyResumoEscCustos');
+  const emptyEl = document.getElementById('emptyResumoEscCustos');
+  if(!thead || !tbody) return;
+  const custos = sistemaGlobal.escritorioCustos.filter(c=>c.data);
+  if(emptyEl) emptyEl.style.display = custos.length ? 'none':'block';
+  if(!custos.length){ thead.innerHTML=''; tbody.innerHTML=''; return; }
+  const meses = [...new Set(custos.map(c=>c.data.slice(0,7)))].sort();
+  const itens = [...new Set(sistemaGlobal.escritorioDescricoes.map(d=>d.nome).concat(custos.map(c=>c.item||'(sem item)')))].filter(Boolean);
+  thead.innerHTML = `<th style="min-width:150px;">Item</th>` + meses.map(m=>`<th class="num" style="width:100px;">${fmtMesLabel(m)}</th>`).join('') + `<th class="num" style="width:110px;">Total</th>`;
+  const linhas = itens.map(item=>{
+    const valoresPorMes = meses.map(m=>custos.filter(c=>(c.item||'(sem item)')===item && c.data.slice(0,7)===m).reduce((s,c)=>s+(c.valor||0),0));
+    const totalLinha = valoresPorMes.reduce((s,v)=>s+v,0);
+    return {item, valoresPorMes, totalLinha};
+  }).filter(l=>l.totalLinha>0.0001);
+  const totalGeralPorMes = meses.map((_,i)=>linhas.reduce((s,l)=>s+l.valoresPorMes[i],0));
+  const totalGeral = totalGeralPorMes.reduce((s,v)=>s+v,0);
+  tbody.innerHTML = linhas.map(l=>`<tr><td>${escapeXml(l.item)}</td>${l.valoresPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${v>0?fmtNum(v,2):'—'}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);font-weight:600;">${fmtNum(l.totalLinha,2)}</td></tr>`).join('')
+    + `<tr style="font-weight:600;background:var(--bg-inset);"><td>TOTAL</td>${totalGeralPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${fmtNum(v,2)}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);">${fmtNum(totalGeral,2)}</td></tr>`;
+}
+function fmtMesLabel(m){
+  const [y,mo] = m.split('-');
+  const nomes = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  return `${nomes[parseInt(mo,10)-1]}/${y.slice(2)}`;
+}
 function addEscCusto(){
-  sistemaGlobal.escritorioCustos.push({id: nextEscCustoId++, data: toISO(new Date()), descricao:'', valor:0, formaPagto:'PIX'});
+  sistemaGlobal.escritorioCustos.push({id: nextEscCustoId++, data: toISO(new Date()), item:'', descricao:'', valor:0, formaPagto:'PIX', parcelas:1});
   renderEscCustos(); saveSistemaGlobal();
 }
 function setupEscritorioTab(){
@@ -3262,6 +3354,7 @@ async function refreshConsolidacao(){
   }
 }
 function renderConsolidacao(){
+  renderBancosChips();
   const totalObras = consolidacaoObras.length;
   const andamentoMedio = totalObras ? consolidacaoObras.reduce((s,o)=>s+o.andamento,0)/totalObras : 0;
   const totalEntradas = consolidacaoObras.reduce((s,o)=>s+o.totalEntradas,0);
@@ -3321,7 +3414,7 @@ function computeExpectativaEventos(){
     (o.recebimentos||[]).forEach(r=>{ if(r.data) eventos.push({data:r.data, valor:r.valor||0, origem:o.nome+' · recebimento'}); });
     (o.compras||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valorTotal||0), origem:o.nome+' · compra'}); });
   });
-  (sistemaGlobal.escritorioCustos||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valor||0), origem:'Escritório · '+(c.descricao||'custo')}); });
+  (sistemaGlobal.escritorioCustos||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valor||0), origem:'Escritório · '+(c.item||c.descricao||'custo')}); });
   (sistemaGlobal.patrimonio||[]).forEach(p=>{ if(p.dataAquisicao) eventos.push({data:p.dataAquisicao, valor:-(p.valor||0), origem:'Patrimônio · '+(p.nome||'bem')}); });
   return eventos.sort((a,b)=>a.data.localeCompare(b.data));
 }
@@ -3402,6 +3495,7 @@ function renderConciliacao(){
 function setupConsolidacaoTab(){
   document.getElementById('btnRefreshConsolidacao').addEventListener('click', refreshConsolidacao);
   document.getElementById('extratoFileInput').addEventListener('change', onExtratoFileSelected);
+  document.getElementById('btnAddBanco').addEventListener('click', addBanco);
 }
 
 /* ============================================================
@@ -3442,7 +3536,7 @@ async function supaUpsertSistemaGlobal(row){
 }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -3456,7 +3550,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -3471,7 +3565,6 @@ function applyProjectPayload(payload){
   nextOrcId = orcamento.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
   compras = payload.compras || [];
   nextCompraId = compras.reduce((m,c)=>Math.max(m,c.id||0), 0) + 1;
-  bancos = payload.bancos || [];
   recebimentos = payload.recebimentos || [];
   nextRecebId = recebimentos.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
   antecipacao = payload.antecipacao || {};
@@ -3511,7 +3604,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -3522,7 +3615,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -3542,7 +3635,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -3552,7 +3645,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
   try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
@@ -3582,7 +3675,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }

@@ -157,11 +157,11 @@ td.code,th.code{font-family:var(--mono);color:var(--blue);}
 .row-sub{background:var(--bg-inset);}
 .row-sub td{padding:12px 14px;}
 
-input.cell, select.cell{
+input.cell, select.cell, textarea.cell{
   background:var(--bg-inset);border:1px solid var(--line);color:var(--text);
   padding:5px 7px;border-radius:2px;font-size:12.5px;width:100%;outline:none;
 }
-input.cell:focus, select.cell:focus{border-color:var(--accent);}
+input.cell:focus, select.cell:focus, textarea.cell:focus{border-color:var(--accent);}
 input.cell.small{width:64px;text-align:right;font-family:var(--mono);}
 input.cell.mono{font-family:var(--mono);}
 input.cell:disabled, input.cell[readonly]{color:var(--text-dim);background:var(--bg-panel);cursor:default;}
@@ -321,27 +321,25 @@ tr[draggable="true"]{cursor:default;}
     </div>
     <nav class="side-nav" id="sideNav">
       <button class="navbtn active" data-tab="orcamento"><span class="ico">1</span> Orçamento <span class="count" id="cOrc">0</span></button>
-      <button class="navbtn" data-tab="planejamento"><span class="ico">2</span> Planejamento <span class="count" id="cAtiv">0</span></button>
-      <button class="navbtn" data-tab="cronograma"><span class="ico">3</span> Cronograma</button>
-      <button class="navbtn" data-tab="bdi"><span class="ico">4</span> BDI</button>
-      <button class="navbtn" data-tab="recursos"><span class="ico">5</span> Recursos</button>
-      <button class="navbtn" data-tab="dashboard"><span class="ico">6</span> Dashboard</button>
+      <button class="navbtn" data-tab="quantitativos"><span class="ico">2</span> Quantitativos</button>
+      <button class="navbtn" data-tab="planejamento"><span class="ico">3</span> Planejamento <span class="count" id="cAtiv">0</span></button>
+      <button class="navbtn" data-tab="cronograma"><span class="ico">4</span> Cronograma</button>
+      <button class="navbtn" data-tab="bdi"><span class="ico">5</span> BDI</button>
+      <button class="navbtn" data-tab="recursos"><span class="ico">6</span> Recursos</button>
+      <button class="navbtn" data-tab="dashboard"><span class="ico">7</span> Dashboard</button>
+      <button class="navbtn" data-tab="diario"><span class="ico">8</span> Diário de obra</button>
+      <button class="navbtn" data-tab="producao"><span class="ico">9</span> Produção</button>
+      <button class="navbtn" data-tab="compras"><span class="ico">10</span> Compras</button>
+      <button class="navbtn" data-tab="estoque"><span class="ico">11</span> Estoque</button>
+      <button class="navbtn" data-tab="fluxocaixa"><span class="ico">12</span> Fluxo de caixa</button>
+      <button class="navbtn" data-tab="composicoes"><span class="ico">13</span> Composições</button>
       <div class="navsep"></div>
-      <button class="navbtn" data-tab="compras"><span class="ico">7</span> Compras</button>
-      <button class="navbtn" data-tab="estoque"><span class="ico">7b</span> Estoque</button>
-      <button class="navbtn" data-tab="fluxocaixa"><span class="ico">8</span> Fluxo de caixa</button>
-      <button class="navbtn" data-tab="composicoes"><span class="ico">9</span> Composições</button>
-      <button class="navbtn" data-tab="quantitativos"><span class="ico">10</span> Quantitativos</button>
+      <button class="navbtn" data-tab="consolidacao"><span class="ico">14</span> Financeiro</button>
+      <button class="navbtn" data-tab="escritorio"><span class="ico">15</span> Escritório</button>
+      <button class="navbtn" data-tab="funcionarios"><span class="ico">16</span> Funcionários</button>
+      <button class="navbtn" data-tab="patrimonio"><span class="ico">17</span> Patrimônio</button>
       <div class="navsep"></div>
-      <button class="navbtn" data-tab="escritorio"><span class="ico">11</span> Escritório</button>
-      <button class="navbtn" data-tab="patrimonio"><span class="ico">12</span> Patrimônio</button>
-      <button class="navbtn" data-tab="consolidacao"><span class="ico">13</span> Consolidação</button>
-      <button class="navbtn" data-tab="acessos"><span class="ico">14</span> Acessos</button>
-      <div class="navsep"></div>
-      <button class="navbtn" data-tab="diario"><span class="ico">15</span> Diário de obra</button>
-      <button class="navbtn" data-tab="producao"><span class="ico">16</span> Produção</button>
-      <button class="navbtn" data-tab="funcionarios"><span class="ico">17</span> Funcionários</button>
-      <div class="navsep"></div>
+      <button class="navbtn" data-tab="acessos"><span class="ico">18</span> Acessos</button>
       <button class="navbtn" data-tab="configuracao"><span class="ico">⚙</span> Configuração</button>
     </nav>
   </div>
@@ -643,14 +641,6 @@ tr[draggable="true"]{cursor:default;}
       <!-- ===================== ABAS EM CONSTRUÇÃO ===================== -->
       <div class="panel" id="panel-compras">
         <div class="card">
-          <h2><span class="tag">contas</span>Contas bancárias cadastradas</h2>
-          <p class="desc">Cadastre as contas/bancos usados para pagar as compras da obra — elas aparecem no seletor "Banco" da tabela abaixo.</p>
-          <div class="toolbar-row">
-            <div id="bancosChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-            <button class="btn small primary" id="btnAddBanco">+ Cadastrar conta</button>
-          </div>
-        </div>
-        <div class="card">
           <div class="toolbar-row">
             <h2 style="margin:0;"><span class="tag">compras</span>Compras realizadas</h2>
             <button class="btn primary small" id="btnAddCompra">+ Adicionar compra</button>
@@ -672,6 +662,7 @@ tr[draggable="true"]{cursor:default;}
                 <th style="width:60px;">Unid.</th>
                 <th style="width:90px;" class="num">R$/unid</th>
                 <th style="width:100px;" class="num">Valor total</th>
+                <th style="width:140px;">Entrega</th>
                 <th style="width:34px;"></th>
               </tr></thead>
               <tbody id="tbodyCompras"></tbody>
@@ -974,10 +965,10 @@ tr[draggable="true"]{cursor:default;}
         </div>
         <div class="card">
           <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">catálogo</span>Descrições cadastradas</h2>
-            <button class="btn small primary" id="btnAddEscDescricao">+ Nova descrição</button>
+            <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
+            <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
           </div>
-          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem no dropdown "Descrição" da tabela de custos abaixo.</p>
+          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem no dropdown "Item" da tabela de custos abaixo.</p>
           <div id="escDescricoesChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
         </div>
         <div class="card">
@@ -986,17 +977,28 @@ tr[draggable="true"]{cursor:default;}
             <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
           </div>
           <div class="stats" id="escCustosStatsStrip"></div>
-          <div class="tbl-wrap"><table class="qtbl zebra" id="tblEscCustos">
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
             <thead><tr>
               <th style="width:120px;">Data</th>
+              <th style="width:150px;">Item</th>
               <th style="min-width:160px;">Descrição</th>
               <th style="width:110px;" class="num">Valor (R$)</th>
               <th style="width:150px;">Forma de pagamento</th>
+              <th style="width:60px;">Parc.</th>
               <th style="width:34px;"></th>
             </tr></thead>
             <tbody id="tbodyEscCustos"></tbody>
           </table></div>
           <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
+          <p class="desc">Soma dos valores lançados, cruzando cada item de linha com o mês do lançamento.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoEscCustos">
+            <thead><tr id="theadResumoEscCustos"></tr></thead>
+            <tbody id="tbodyResumoEscCustos"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyResumoEscCustos" style="display:none;padding:20px;">Lance custos para ver o resumo por mês.</div>
         </div>
       </div>
 
@@ -1040,6 +1042,14 @@ tr[draggable="true"]{cursor:default;}
           </div>
           <p class="desc">Junta os dados de compras, recebimentos e orçamento de <b>todas as obras</b> cadastradas no sistema, mais os custos de escritório e as aquisições de patrimônio.</p>
           <div class="stats" id="consolidacaoStatsStrip"></div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">contas</span>Contas bancárias cadastradas</h2>
+          <p class="desc">Contas/bancos da empresa, usadas para pagar compras e custos em <b>qualquer obra</b> — aparecem no seletor "Banco" de Compras, Escritório e demais relatórios financeiros.</p>
+          <div class="toolbar-row">
+            <div id="bancosChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+            <button class="btn small primary" id="btnAddBanco">+ Cadastrar conta</button>
+          </div>
         </div>
         <div class="card">
           <h2><span class="tag">por obra</span>KPIs por obra</h2>

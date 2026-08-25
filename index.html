@@ -333,6 +333,15 @@ tr[draggable="true"]{cursor:default;}
       <button class="navbtn" data-tab="composicoes"><span class="ico">9</span> Composições</button>
       <button class="navbtn" data-tab="quantitativos"><span class="ico">10</span> Quantitativos</button>
       <div class="navsep"></div>
+      <button class="navbtn" data-tab="escritorio"><span class="ico">11</span> Escritório</button>
+      <button class="navbtn" data-tab="patrimonio"><span class="ico">12</span> Patrimônio</button>
+      <button class="navbtn" data-tab="consolidacao"><span class="ico">13</span> Consolidação</button>
+      <button class="navbtn" data-tab="acessos"><span class="ico">14</span> Acessos</button>
+      <div class="navsep"></div>
+      <button class="navbtn" data-tab="diario"><span class="ico">15</span> Diário de obra</button>
+      <button class="navbtn" data-tab="producao"><span class="ico">16</span> Produção</button>
+      <button class="navbtn" data-tab="funcionarios"><span class="ico">17</span> Funcionários</button>
+      <div class="navsep"></div>
       <button class="navbtn" data-tab="configuracao"><span class="ico">⚙</span> Configuração</button>
     </nav>
   </div>
@@ -901,6 +910,23 @@ tr[draggable="true"]{cursor:default;}
             </div>
 
             <div class="qsection">
+              <h3><span class="tag">resumo</span>Resumo por acabamento</h3>
+              <p class="desc">Quantidade de área de cada acabamento inserido (paredes + muro). Informe o rendimento por lata de 18L para calcular quantas latas comprar. Salve um acabamento no sistema para que ele já apareça pronto em obras novas.</p>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblResumoAcabamentos">
+                <thead><tr>
+                  <th style="min-width:200px;">Acabamento</th>
+                  <th style="width:130px;">Tipo</th>
+                  <th style="width:90px;" class="num">Área (m²)</th>
+                  <th style="width:130px;" class="num">Rendimento/Lata (18L)</th>
+                  <th style="width:110px;" class="num">Total de latas</th>
+                  <th style="width:150px;"></th>
+                </tr></thead>
+                <tbody id="tbodyResumoAcabamentos"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyResumoAcabamentos" style="display:none;padding:20px;">Nenhum acabamento cadastrado ainda.</div>
+            </div>
+
+            <div class="qsection">
               <div class="toolbar-row">
                 <h3><span class="tag">muro</span>Muro</h3>
                 <button class="btn small primary" id="btnAddMuro">+ Adicionar linha</button>
@@ -938,6 +964,216 @@ tr[draggable="true"]{cursor:default;}
 
           </div>
         </details>
+      </div>
+
+      <!-- ===================== ESCRITÓRIO ===================== -->
+      <div class="panel" id="panel-escritorio">
+        <div class="card">
+          <h2><span class="tag">empresa</span>Escritório</h2>
+          <p class="desc">Custos fixos e variáveis do escritório central (água, energia, internet, aluguel etc). Estes dados são <b>da empresa</b>, não de uma obra específica, e ficam disponíveis em qualquer projeto que você abrir.</p>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">catálogo</span>Descrições cadastradas</h2>
+            <button class="btn small primary" id="btnAddEscDescricao">+ Nova descrição</button>
+          </div>
+          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem no dropdown "Descrição" da tabela de custos abaixo.</p>
+          <div id="escDescricoesChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">custos</span>Custos do escritório</h2>
+            <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
+          </div>
+          <div class="stats" id="escCustosStatsStrip"></div>
+          <div class="tbl-wrap"><table class="qtbl zebra" id="tblEscCustos">
+            <thead><tr>
+              <th style="width:120px;">Data</th>
+              <th style="min-width:160px;">Descrição</th>
+              <th style="width:110px;" class="num">Valor (R$)</th>
+              <th style="width:150px;">Forma de pagamento</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyEscCustos"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
+        </div>
+      </div>
+
+      <!-- ===================== PATRIMÔNIO ===================== -->
+      <div class="panel" id="panel-patrimonio">
+        <div class="card">
+          <h2><span class="tag">empresa</span>Patrimônio</h2>
+          <p class="desc">Máquinas, equipamentos, veículos e demais bens adquiridos pela construtora. Dado da empresa, compartilhado entre todas as obras.</p>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">bens</span>Bens patrimoniais</h2>
+            <button class="btn small primary" id="btnAddPatrimonio">+ Adicionar bem</button>
+          </div>
+          <div class="stats" id="patrimonioStatsStrip"></div>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblPatrimonio">
+            <thead><tr>
+              <th style="min-width:160px;">Nome / descrição</th>
+              <th style="width:140px;">Categoria</th>
+              <th style="width:120px;">Data aquisição</th>
+              <th style="width:110px;" class="num">Valor (R$)</th>
+              <th style="min-width:130px;">Fornecedor</th>
+              <th style="width:110px;">Nº série/placa</th>
+              <th style="width:130px;">Status</th>
+              <th style="min-width:130px;">Localização/Obra</th>
+              <th style="min-width:150px;">Observações</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyPatrimonio"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyPatrimonio" style="display:none;padding:20px;">Nenhum bem cadastrado ainda.</div>
+        </div>
+      </div>
+
+      <!-- ===================== CONSOLIDAÇÃO ===================== -->
+      <div class="panel" id="panel-consolidacao">
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">todas as obras</span>Dashboard consolidado</h2>
+            <button class="btn small" id="btnRefreshConsolidacao">↻ Atualizar dados de todas as obras</button>
+          </div>
+          <p class="desc">Junta os dados de compras, recebimentos e orçamento de <b>todas as obras</b> cadastradas no sistema, mais os custos de escritório e as aquisições de patrimônio.</p>
+          <div class="stats" id="consolidacaoStatsStrip"></div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">por obra</span>KPIs por obra</h2>
+          <div class="tbl-wrap"><table class="qtbl zebra" id="tblConsolidacaoObras">
+            <thead><tr>
+              <th style="min-width:150px;">Obra</th>
+              <th style="width:100px;" class="num">Andamento</th>
+              <th style="width:110px;" class="num">Orçado (R$)</th>
+              <th style="width:110px;" class="num">Entradas (R$)</th>
+              <th style="width:110px;" class="num">Saídas (R$)</th>
+              <th style="width:110px;" class="num">Saldo (R$)</th>
+            </tr></thead>
+            <tbody id="tbodyConsolidacaoObras"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyConsolidacaoObras" style="display:none;padding:20px;">Nenhuma obra encontrada ainda. Clique em "Atualizar" acima.</div>
+          <div style="position:relative;height:280px;margin-top:16px;">
+            <canvas id="chartConsolidacaoObras"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">conta</span>Expectativa de saldo em conta</h2>
+          <p class="desc">Recebimentos e saídas (compras de obras + custos do escritório + aquisições de patrimônio) de todo o sistema, em ordem cronológica.</p>
+          <div style="position:relative;height:260px;">
+            <canvas id="chartExpectativaSaldo"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">conciliação</span>Extrato bancário</h2>
+          <p class="desc">Envie um extrato em CSV (colunas: data, descrição, valor) para comparar com a expectativa acima e localizar pendências. <span class="badge warn">versão inicial — layout específico dos bancos será ajustado depois</span></p>
+          <div class="toolbar-row">
+            <input type="file" id="extratoFileInput" accept=".csv,.txt">
+            <span class="hint" id="extratoStatus"></span>
+          </div>
+          <div class="tbl-wrap" style="margin-top:12px;"><table class="qtbl zebra" id="tblConciliacao">
+            <thead><tr>
+              <th style="width:110px;">Data</th><th>Descrição</th><th class="num" style="width:100px;">Valor (R$)</th><th style="width:130px;">Situação</th>
+            </tr></thead>
+            <tbody id="tbodyConciliacao"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyConciliacao" style="display:none;padding:20px;">Envie um extrato para ver a conciliação.</div>
+        </div>
+      </div>
+
+      <!-- ===================== ACESSOS ===================== -->
+      <div class="panel" id="panel-acessos">
+        <div class="card">
+          <h2><span class="tag">empresa</span>Acessos</h2>
+          <p class="desc">Cadastro de colaboradores e permissões de acesso às páginas do sistema. A senha padrão é o primeiro nome (sem acentos, minúsculo) e deve ser trocada no primeiro acesso. <span class="badge warn">a tela de login em si ainda não foi implementada</span></p>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">colaboradores</span>Funcionários cadastrados</h2>
+            <button class="btn small primary" id="btnAddColaborador">+ Cadastrar funcionário</button>
+          </div>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblColaboradores">
+            <thead><tr>
+              <th style="min-width:140px;">Nome</th>
+              <th style="width:120px;">Data</th>
+              <th style="width:170px;">Função</th>
+              <th style="min-width:180px;">E-mail</th>
+              <th style="width:130px;">Senha</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyColaboradores"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyColaboradores" style="display:none;padding:20px;">Nenhum funcionário cadastrado ainda.</div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">permissões</span>Matriz de acesso por página</h2>
+          <p class="desc">Marque as páginas que cada funcionário pode acessar.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblPermissoes">
+            <thead><tr id="theadPermissoes"></tr></thead>
+            <tbody id="tbodyPermissoes"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyPermissoes" style="display:none;padding:20px;">Cadastre um funcionário para configurar as permissões.</div>
+        </div>
+      </div>
+
+      <!-- ===================== DIÁRIO DE OBRA ===================== -->
+      <div class="panel" id="panel-diario">
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">obra</span>Diário de obra</h2>
+            <button class="btn small primary" id="btnAddDiario">+ Novo registro</button>
+          </div>
+          <p class="desc">Um registro por dia, com efetivo de funcionários, clima, atividades realizadas e movimentação de materiais.</p>
+        </div>
+        <div id="diarioEntriesWrap"></div>
+        <div class="empty-state" id="emptyDiario" style="display:none;padding:30px;">Nenhum registro de diário ainda. Clique em "+ Novo registro" para começar.</div>
+      </div>
+
+      <!-- ===================== PRODUÇÃO ===================== -->
+      <div class="panel" id="panel-producao">
+        <div class="placeholder-panel">
+          <div class="big">Produção</div>
+          <p>Cálculo da produção por equipe. Cadastrar funcionários, montar equipes, criar tabela de cálculo produção.</p>
+        </div>
+      </div>
+
+      <!-- ===================== FUNCIONÁRIOS ===================== -->
+      <div class="panel" id="panel-funcionarios">
+        <div class="card">
+          <h2><span class="tag">empresa</span>Funcionários</h2>
+          <p class="desc">Cadastro de funcionários da construtora (obra e escritório). Dado da empresa, compartilhado entre todas as obras.</p>
+        </div>
+        <div class="card">
+          <h2><span class="tag">salários</span>Tabela de salários por função</h2>
+          <p class="desc">Defina o valor salarial de cada função. O salário do funcionário é sempre puxado desta tabela, de acordo com a função dele.</p>
+          <div class="tbl-wrap"><table class="qtbl zebra" id="tblSalariosFuncao">
+            <thead><tr><th style="min-width:220px;">Função</th><th style="width:150px;" class="num">Salário (R$)</th></tr></thead>
+            <tbody id="tbodySalariosFuncao"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">cadastro</span>Funcionários cadastrados</h2>
+            <button class="btn small primary" id="btnAddFuncionario">+ Cadastrar funcionário</button>
+          </div>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblFuncionarios">
+            <thead><tr>
+              <th style="min-width:150px;">Nome</th>
+              <th style="min-width:180px;">Endereço</th>
+              <th style="width:120px;">CPF</th>
+              <th style="width:100px;">RG</th>
+              <th style="width:100px;">CTPS</th>
+              <th style="width:170px;">Função</th>
+              <th style="width:110px;" class="num">Salário (R$)</th>
+              <th style="min-width:140px;">Obra</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyFuncionarios"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyFuncionarios" style="display:none;padding:20px;">Nenhum funcionário cadastrado ainda.</div>
+        </div>
       </div>
 
       <!-- ===================== CONFIGURAÇÃO ===================== -->

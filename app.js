@@ -43,7 +43,15 @@ let alvenariaRows = [];
 let nextAlvenariaId = 1;
 let muroRows = [];
 let nextMuroId = 1;
-const REVEST_TIPOS = ['Tinta','Textura','Papel de parede','Revestimento/Pedra','Outro'];
+const REVEST_TIPOS_BASE = ['Tinta','Textura','Papel de parede','Revestimento/Pedra'];
+let customRevestTipos = [];
+function allRevestTipos(){ return [...REVEST_TIPOS_BASE, ...customRevestTipos]; }
+function tipoOptionsHtml(selected){
+  const tipos = allRevestTipos();
+  let extra = '';
+  if(selected && !tipos.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
+  return tipos.map(t=>`<option ${t===selected?'selected':''}>${escapeXml(t)}</option>`).join('') + extra + `<option value="__add_tipo__">+ Adicionar tipo</option>`;
+}
 const SENTIDO_OPTIONS = ['Horizontal','Vertical'];
 const FACE_OPTIONS = ['Interno','Externo','Externo (parte interna da platibanda)','Banheiro','Cozinha'];
 const FACES_INTERNAS = ['Interno','Banheiro','Cozinha'];
@@ -574,6 +582,7 @@ function renderAll(){
   try{ renderFluxoCaixaAll(); }catch(e){ console.error('Fluxo de caixa:', e); }
   try{ renderComposicoes(); }catch(e){ console.error('Composições:', e); }
   try{ renderAlvenariaAll(); }catch(e){ console.error('Quantitativos:', e); }
+  try{ renderDiario(); }catch(e){ console.error('Diário de obra:', e); }
 }
 
 /* ============================================================
@@ -2262,7 +2271,7 @@ function faceOptionsHtml(selected){
 function revestimentoRowHtml(r){
   return `<tr data-revest="${r.id}">
     <td><input type="text" class="cell" data-rvf="nome" data-revest="${r.id}" value="${escapeAttr(r.nome)}" placeholder="Ex: Tinta - Cor branco neve / Fosco / Suvinil"></td>
-    <td><select class="cell" data-rvf="tipo" data-revest="${r.id}">${REVEST_TIPOS.map(t=>`<option ${t===r.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td><select class="cell" data-rvf="tipo" data-revest="${r.id}">${tipoOptionsHtml(r.tipo)}</select></td>
     <td><button class="icon-btn" data-revestremove="${r.id}" title="Remover">✕</button></td>
   </tr>`;
 }
@@ -2276,7 +2285,18 @@ function renderRevestimentos(){
     el.addEventListener('change', ()=>{
       const r = revestimentos.find(x=>String(x.id)===el.dataset.revest);
       if(!r) return;
-      r[el.dataset.rvf] = el.value;
+      const f = el.dataset.rvf;
+      if(f==='tipo' && el.value==='__add_tipo__'){
+        const novo = (prompt('Nome do novo tipo de acabamento:')||'').trim();
+        if(novo){
+          if(!allRevestTipos().includes(novo)) customRevestTipos.push(novo);
+          r.tipo = novo;
+        }
+        renderAlvenariaAll();
+        saveProject();
+        return;
+      }
+      r[f] = el.value;
       renderAlvenariaAll();
       saveProject();
     });
@@ -2293,7 +2313,7 @@ function renderRevestimentos(){
   });
 }
 function addRevestimento(){
-  revestimentos.push({id:nextRevestimentoId++, nome:'', tipo:'Tinta'});
+  revestimentos.push({id:nextRevestimentoId++, nome:'', tipo:'Tinta', rendimento:null, sistemaId:null});
   renderRevestimentos();
   saveProject();
 }
@@ -2373,11 +2393,18 @@ function addAlvenariaRow(){
 }
 function computeResumoAlvenaria(){
   let fundoInt=0, emassInt=0, pintInt=0, fundoExt=0;
+  let chapiscoExt=0, rebocoExt=0, fundoSeladorExt=0, chapiscoInt=0, rebocoInt=0, fundoSeladorInt=0;
   alvenariaRows.forEach(r=>{
     const area = alvArea(r);
     if(area<=0) return;
     [[r.face1,r.acab1],[r.face2,r.acab2]].forEach(([face,acab])=>{
-      if(!face || !acab) return;
+      if(!face) return;
+      if(FACES_INTERNAS.includes(face)){
+        chapiscoInt += area; rebocoInt += area; fundoSeladorInt += area;
+      } else if(FACES_EXTERNAS.includes(face)){
+        chapiscoExt += area; rebocoExt += area; fundoSeladorExt += area;
+      }
+      if(!acab) return;
       const tipo = revestTipo(acab);
       if(FACES_INTERNAS.includes(face)){
         if(tipo==='Tinta'||tipo==='Textura') fundoInt += area;
@@ -2387,22 +2414,107 @@ function computeResumoAlvenaria(){
       }
     });
   });
-  return {fundoInt, emassInt, pintInt, fundoTeto:0, emassTeto:0, pintTeto:0, fundoExt};
+  const fundacao = alvenariaRows.reduce((s,r)=>s+alvFundacaoVal(r),0);
+  return {fundoInt, emassInt, pintInt, fundoTeto:0, emassTeto:0, pintTeto:0, fundoExt, fundacao, chapiscoExt, rebocoExt, fundoSeladorExt, chapiscoInt, rebocoInt, fundoSeladorInt};
 }
 function renderResumoAlvenaria(){
   const tbody = document.getElementById('tbodyResumoAlvenaria');
+  if(tbody){
+    const s = computeResumoAlvenaria();
+    const rows = [
+      ['Fundo selador em área interna', s.fundoInt],
+      ['Emassamento e lixamento de parede interna', s.emassInt],
+      ['Pintura em parede interna', s.pintInt],
+      ['Fundo selador em teto', s.fundoTeto, true],
+      ['Emassamento e lixamento de teto', s.emassTeto, true],
+      ['Pintura em teto', s.pintTeto, true],
+      ['Fundo selador em área externa', s.fundoExt],
+      ['Fundação', s.fundacao],
+      ['Chapisco externo', s.chapiscoExt],
+      ['Reboco externo', s.rebocoExt],
+      ['Fundo selador externo', s.fundoSeladorExt],
+      ['Chapisco interno', s.chapiscoInt],
+      ['Reboco interno', s.rebocoInt],
+      ['Fundo selador interno', s.fundoSeladorInt],
+    ];
+    tbody.innerHTML = rows.map(([lbl,val,pendente])=>`<tr><td>${lbl}${pendente?' <span class="badge warn">calc. no Forro</span>':''}</td><td class="num">${fmtNum(val,2)} m²</td></tr>`).join('');
+  }
+  renderResumoAcabamentos();
+}
+
+/* --- resumo por acabamento (área, rendimento, latas, salvar no sistema) --- */
+function computeAcabamentosResumo(){
+  return revestimentos.map(rv=>{
+    let area = 0;
+    alvenariaRows.forEach(r=>{
+      const a = alvArea(r);
+      if(a<=0) return;
+      if(r.acab1===rv.nome) area += a;
+      if(r.acab2===rv.nome) area += a;
+    });
+    muroRows.forEach(r=>{
+      const a = muroArea(r);
+      if(a<=0) return;
+      if(r.acabExt===rv.nome) area += a;
+      if(r.acabInt===rv.nome) area += a;
+    });
+    return {rv, area};
+  });
+}
+function acabResumoRowHtml(item){
+  const {rv, area} = item;
+  const rend = rv.rendimento;
+  const latas = (rend && rend>0) ? Math.round((area/rend)*10)/10 : null;
+  return `<tr data-acabresumo="${rv.id}">
+    <td>${escapeXml(rv.nome||'(sem nome)')}</td>
+    <td><span class="badge ok">${escapeXml(rv.tipo)}</span></td>
+    <td class="num">${fmtNum(area,2)} m²</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-arf="rendimento" data-acabresumo="${rv.id}" value="${rend?fmtInput(rend):''}" placeholder="m²/lata"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${latas!==null ? fmtNum(latas,1)+' lata(s)' : '—'}</td>
+    <td><button class="btn small" data-acabsalvar="${rv.id}" title="Salvar este acabamento no sistema, para aparecer em obras novas">${rv.sistemaId?'✓ No sistema':'Salvar no sistema'}</button></td>
+  </tr>`;
+}
+function renderResumoAcabamentos(){
+  const tbody = document.getElementById('tbodyResumoAcabamentos');
   if(!tbody) return;
-  const s = computeResumoAlvenaria();
-  const rows = [
-    ['Fundo selador em área interna', s.fundoInt],
-    ['Emassamento e lixamento de parede interna', s.emassInt],
-    ['Pintura em parede interna', s.pintInt],
-    ['Fundo selador em teto', s.fundoTeto, true],
-    ['Emassamento e lixamento de teto', s.emassTeto, true],
-    ['Pintura em teto', s.pintTeto, true],
-    ['Fundo selador em área externa', s.fundoExt],
-  ];
-  tbody.innerHTML = rows.map(([lbl,val,pendente])=>`<tr><td>${lbl}${pendente?' <span class="badge warn">calc. no Forro</span>':''}</td><td class="num">${fmtNum(val,2)} m²</td></tr>`).join('');
+  const emptyEl = document.getElementById('emptyResumoAcabamentos');
+  const items = computeAcabamentosResumo();
+  if(emptyEl) emptyEl.style.display = items.length ? 'none':'block';
+  tbody.innerHTML = items.map(acabResumoRowHtml).join('');
+  tbody.querySelectorAll('[data-arf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const rv = revestimentos.find(x=>String(x.id)===el.dataset.acabresumo);
+      if(!rv) return;
+      rv.rendimento = parseFloat(el.value)||null;
+      renderResumoAcabamentos();
+      saveProject();
+    });
+  });
+  tbody.querySelectorAll('[data-acabsalvar]').forEach(btn=>{
+    btn.addEventListener('click', ()=>salvarAcabamentoNoSistema(btn.dataset.acabsalvar));
+  });
+}
+async function salvarAcabamentoNoSistema(revestId){
+  const rv = revestimentos.find(x=>String(x.id)===String(revestId));
+  if(!rv || !rv.nome){ showToast('Dê um nome ao acabamento antes de salvar no sistema.'); return; }
+  if(!rv.sistemaId) rv.sistemaId = crypto.randomUUID();
+  try{
+    await supaUpsertAcabamentoSistema({ id: rv.sistemaId, nome: rv.nome, tipo: rv.tipo, rendimento: rv.rendimento });
+    showToast(`"${rv.nome}" salvo no sistema — vai aparecer em obras novas.`);
+    renderResumoAcabamentos();
+    saveProject();
+  }catch(e){
+    console.error(e);
+    showToast('Não consegui salvar no sistema agora (verifique a conexão).');
+  }
+}
+async function loadAcabamentosSistemaIntoRevestimentos(){
+  const rows = await supaListAcabamentosSistema();
+  if(!rows || !rows.length) return;
+  rows.forEach(row=>{
+    if(revestimentos.some(r=>r.sistemaId===row.id)) return;
+    revestimentos.push({id:nextRevestimentoId++, nome:row.nome, tipo:row.tipo||'Tinta', rendimento:row.rendimento||null, sistemaId:row.id});
+  });
 }
 
 /* --- muro --- */
@@ -2515,7 +2627,785 @@ function setupQuantitativosTab(){
 }
 
 /* ============================================================
-   16. PERSISTÊNCIA (Supabase)
+   15e. DIÁRIO DE OBRA (por obra)
+   ============================================================ */
+let diarioObra = [];
+let nextDiarioId = 1;
+let nextDiarioSubId = 1;
+
+function efetivoRowHtml(entryId, r){
+  return `<tr data-diario="${entryId}" data-efrow="${r.id}">
+    <td><select class="cell" data-ef="funcao" data-diario="${entryId}" data-efrow="${r.id}">${funcaoOperarioOptionsHtml(r.funcao)}</select></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-ef="qtd" data-diario="${entryId}" data-efrow="${r.id}" value="${r.qtd||0}"></td>
+    <td><button class="icon-btn" data-efremove="${r.id}" data-diario="${entryId}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function materialRowHtml(entryId, listName, r){
+  return `<tr data-diario="${entryId}" data-matrow="${r.id}">
+    <td><input type="text" class="cell" data-mat="item" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.item)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-mat="qtd" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${r.qtd||0}"></td>
+    <td><input type="text" class="cell" style="width:60px;" data-mat="unid" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.unid)}"></td>
+    <td><input type="text" class="cell" data-mat="obs" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.obs)}"></td>
+    <td><button class="icon-btn" data-matremove="${r.id}" data-matlist="${listName}" data-diario="${entryId}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function diarioEntryHtml(e, isOpen){
+  const totalEfetivo = (e.efetivo||[]).reduce((s,r)=>s+(parseInt(r.qtd)||0),0);
+  return `<details class="qitem" data-diarioentry="${e.id}" ${isOpen?'open':''}>
+    <summary class="qitem-summary"><span class="chev">▸</span> Diário nº ${e.numero} — ${e.data?fmtDate(e.data):'(sem data)'} <span class="qitem-meta">${totalEfetivo} funcionário(s) em campo</span>
+      <button class="icon-btn" data-diarioremove="${e.id}" title="Remover registro" style="margin-left:8px;">✕</button>
+    </summary>
+    <div class="qitem-body">
+      <div class="qsection">
+        <h3><span class="tag">geral</span>Dados gerais</h3>
+        <div class="config-grid">
+          <div class="field-row"><label>Data</label><input type="date" class="cell" data-df="data" data-diario="${e.id}" value="${e.data||''}"></div>
+          <div class="field-row"><label>Responsável pelo registro</label><input type="text" class="cell" data-df="responsavel" data-diario="${e.id}" value="${escapeAttr(e.responsavel)}"></div>
+        </div>
+        <div class="config-grid" style="margin-top:10px;">
+          <div class="field-row"><label>Clima — manhã</label><select class="cell" data-df="climaManha" data-diario="${e.id}">${CLIMA_OPCOES.map(c=>`<option ${c===e.climaManha?'selected':''}>${c}</option>`).join('')}</select></div>
+          <div class="field-row"><label>Clima — tarde</label><select class="cell" data-df="climaTarde" data-diario="${e.id}">${CLIMA_OPCOES.map(c=>`<option ${c===e.climaTarde?'selected':''}>${c}</option>`).join('')}</select></div>
+          <div class="field-row"><label>Clima — noite</label><select class="cell" data-df="climaNoite" data-diario="${e.id}">${CLIMA_OPCOES.map(c=>`<option ${c===e.climaNoite?'selected':''}>${c}</option>`).join('')}</select></div>
+        </div>
+      </div>
+      <div class="qsection">
+        <div class="toolbar-row"><h3><span class="tag">efetivo</span>Efetivo do dia (funcionários por função)</h3><button class="btn small primary" data-diarioaddefetivo="${e.id}">+ Adicionar</button></div>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Função</th><th class="num" style="width:100px;">Quantidade</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.efetivo||[]).map(r=>efetivoRowHtml(e.id,r)).join('')}</tbody>
+          <tfoot><tr style="font-weight:600;background:var(--bg-inset);"><td style="text-align:right;padding:8px 10px;">TOTAL</td><td class="num" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;">${totalEfetivo}</td><td></td></tr></tfoot>
+        </table></div>
+      </div>
+      <div class="qsection">
+        <h3><span class="tag">atividades</span>Atividades realizadas</h3>
+        <textarea class="cell" style="width:100%;min-height:80px;font-family:var(--sans);" data-df="atividades" data-diario="${e.id}" placeholder="Descreva as atividades executadas no dia...">${escapeXml(e.atividades)}</textarea>
+      </div>
+      <div class="qsection">
+        <div class="toolbar-row"><h3><span class="tag">materiais</span>Entrada de materiais</h3><button class="btn small primary" data-diarioaddentrada="${e.id}">+ Adicionar</button></div>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:70px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.entradaMateriais||[]).map(r=>materialRowHtml(e.id,'entradaMateriais',r)).join('')}</tbody>
+        </table></div>
+      </div>
+      <div class="qsection">
+        <div class="toolbar-row"><h3><span class="tag">materiais</span>Saída de materiais</h3><button class="btn small primary" data-diarioaddsaida="${e.id}">+ Adicionar</button></div>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:70px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.saidaMateriais||[]).map(r=>materialRowHtml(e.id,'saidaMateriais',r)).join('')}</tbody>
+        </table></div>
+      </div>
+      <div class="qsection">
+        <h3><span class="tag">ocorrências</span>Ocorrências / observações</h3>
+        <textarea class="cell" style="width:100%;min-height:60px;font-family:var(--sans);" data-df="ocorrencias" data-diario="${e.id}" placeholder="Visitas, problemas, atrasos, acidentes etc.">${escapeXml(e.ocorrencias)}</textarea>
+      </div>
+    </div>
+  </details>`;
+}
+function bindDiarioEvents(){
+  const wrap = document.getElementById('diarioEntriesWrap');
+  if(!wrap) return;
+  wrap.querySelectorAll('[data-df]').forEach(el=>{
+    const evName = el.tagName==='SELECT' ? 'change' : 'change';
+    el.addEventListener(evName, ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
+      if(!entry) return;
+      entry[el.dataset.df] = el.value;
+      if(el.dataset.df==='data') renderDiario();
+      saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diarioremove]').forEach(btn=>{
+    btn.addEventListener('click', (ev)=>{
+      ev.preventDefault(); ev.stopPropagation();
+      diarioObra = diarioObra.filter(x=>String(x.id)!==btn.dataset.diarioremove);
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diarioaddefetivo]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diarioaddefetivo);
+      if(!entry) return;
+      entry.efetivo = entry.efetivo||[];
+      entry.efetivo.push({id: nextDiarioSubId++, funcao: allFuncoesOperario()[0]||'', qtd:1});
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-efremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diario);
+      if(!entry) return;
+      entry.efetivo = (entry.efetivo||[]).filter(r=>String(r.id)!==btn.dataset.efremove);
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-ef]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
+      if(!entry) return;
+      const row = (entry.efetivo||[]).find(r=>String(r.id)===el.dataset.efrow);
+      if(!row) return;
+      if(el.dataset.ef==='funcao' && el.value==='__add_funcao_op__'){
+        const novo = (prompt('Nome da nova função:')||'').trim();
+        if(novo){
+          sistemaGlobal.funcoesOperarioCustom = sistemaGlobal.funcoesOperarioCustom || [];
+          if(!allFuncoesOperario().includes(novo)) sistemaGlobal.funcoesOperarioCustom.push(novo);
+          row.funcao = novo;
+          saveSistemaGlobal();
+        }
+        renderDiario(); saveProject();
+        return;
+      }
+      row[el.dataset.ef] = el.dataset.ef==='qtd' ? (parseInt(el.value)||0) : el.value;
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diarioaddentrada]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diarioaddentrada);
+      if(!entry) return;
+      entry.entradaMateriais = entry.entradaMateriais||[];
+      entry.entradaMateriais.push({id: nextDiarioSubId++, item:'', qtd:0, unid:'', obs:''});
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diarioaddsaida]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diarioaddsaida);
+      if(!entry) return;
+      entry.saidaMateriais = entry.saidaMateriais||[];
+      entry.saidaMateriais.push({id: nextDiarioSubId++, item:'', qtd:0, unid:'', obs:''});
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-mat]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
+      if(!entry) return;
+      const list = entry[el.dataset.matlist];
+      const row = (list||[]).find(r=>String(r.id)===el.dataset.matrow);
+      if(!row) return;
+      row[el.dataset.mat] = el.dataset.mat==='qtd' ? (parseFloat(el.value)||0) : el.value;
+      saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-matremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diario);
+      if(!entry) return;
+      entry[btn.dataset.matlist] = (entry[btn.dataset.matlist]||[]).filter(r=>String(r.id)!==btn.dataset.matremove);
+      renderDiario(); saveProject();
+    });
+  });
+}
+function renderDiario(){
+  const wrap = document.getElementById('diarioEntriesWrap');
+  if(!wrap) return;
+  const openIds = new Set();
+  wrap.querySelectorAll('details.qitem[open]').forEach(d=>openIds.add(d.dataset.diarioentry));
+  const emptyEl = document.getElementById('emptyDiario');
+  if(emptyEl) emptyEl.style.display = diarioObra.length ? 'none':'block';
+  const sorted = [...diarioObra].sort((a,b)=>(b.data||'').localeCompare(a.data||'') || (b.numero-a.numero));
+  wrap.innerHTML = sorted.map((e,i)=>diarioEntryHtml(e, openIds.size ? openIds.has(String(e.id)) : i===0)).join('');
+  bindDiarioEvents();
+}
+function addDiarioEntry(){
+  diarioObra.push({
+    id: nextDiarioId++, numero: diarioObra.length+1, data: toISO(new Date()),
+    climaManha:'Bom', climaTarde:'Bom', climaNoite:'Bom', responsavel:'',
+    efetivo:[], atividades:'', entradaMateriais:[], saidaMateriais:[], ocorrencias:'',
+  });
+  renderDiario(); saveProject();
+}
+function setupDiarioTab(){
+  document.getElementById('btnAddDiario').addEventListener('click', addDiarioEntry);
+}
+
+/* ============================================================
+   16. EMPRESA — ESCRITÓRIO / PATRIMÔNIO / ACESSOS / CONSOLIDAÇÃO
+   (dados globais da empresa, compartilhados entre todas as obras)
+   ============================================================ */
+let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[] };
+let nextEscDescricaoId = 1;
+let nextEscCustoId = 1;
+let nextPatrimonioId = 1;
+let nextColaboradorId = 1;
+let saveSistemaDebounce = null;
+
+const SYSTEM_PAGES = [
+  {id:'orcamento', label:'Orçamento'}, {id:'planejamento', label:'Planejamento'}, {id:'cronograma', label:'Cronograma'},
+  {id:'bdi', label:'BDI'}, {id:'recursos', label:'Recursos'}, {id:'dashboard', label:'Dashboard'},
+  {id:'compras', label:'Compras'}, {id:'estoque', label:'Estoque'}, {id:'fluxocaixa', label:'Fluxo de caixa'},
+  {id:'composicoes', label:'Composições'}, {id:'quantitativos', label:'Quantitativos'},
+  {id:'escritorio', label:'Escritório'}, {id:'patrimonio', label:'Patrimônio'}, {id:'consolidacao', label:'Consolidação'},
+  {id:'acessos', label:'Acessos'}, {id:'diario', label:'Diário de obra'}, {id:'producao', label:'Produção'},
+  {id:'funcionarios', label:'Funcionários'}, {id:'configuracao', label:'Configuração'},
+];
+const PATRIMONIO_CATEGORIAS = ['Máquina','Equipamento','Veículo','Ferramenta','Imóvel','Móvel/Utensílio','Outro'];
+const PATRIMONIO_STATUS = ['Em uso','Em manutenção','Parado','Vendido','Baixado'];
+const FUNCAO_COLAB_BASE = ['Secretaria','Financeiro','Estagiário','Compras','Mestre','Técnico de edificações','Sócio-administrador'];
+const FUNCOES_OPERARIO_BASE = [
+  'Servente','Pedreiro','Carpinteiro','Armador','Eletricista','Encanador','Pintor','Gesseiro','Azulejista','Vidraceiro',
+  'Soldador','Marmorista','Impermeabilizador','Ferramenteiro','Operador de máquina','Motorista','Ajudante geral','Vigia',
+  'Almoxarife','Mestre de obras','Encarregado de obra','Técnico em edificações','Técnico de segurança do trabalho','Engenheiro civil',
+  'Secretária','Assistente administrativo','Financeiro','Recursos Humanos','Comprador','Recepcionista','Contador','Estagiário','Sócio-administrador',
+];
+const CLIMA_OPCOES = ['Bom','Nublado','Chuvoso','Impraticável'];
+
+const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[]};
+let nextFuncionarioId = 1;
+let obrasCache = [];
+
+function saveSistemaGlobal(){ clearTimeout(saveSistemaDebounce); saveSistemaDebounce = setTimeout(doSaveSistemaGlobal, 500); }
+async function doSaveSistemaGlobal(){
+  try{ await supaUpsertSistemaGlobal({ id:'global', dados: sistemaGlobal, atualizado_em: new Date().toISOString() }); }
+  catch(e){ console.error('Erro ao salvar dados globais:', e); }
+  try{ localStorage.setItem('qorban_sistema_global', JSON.stringify(sistemaGlobal)); }catch(e){}
+}
+function seedColaboradorPadrao(){
+  if(sistemaGlobal.colaboradores.length) return;
+  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]=true);
+  sistemaGlobal.colaboradores.push({
+    id: nextColaboradorId++, nome:'João Rios', data:'2026-01-28', funcao:'Sócio-administrador',
+    email:'joaobatistafh@gmail.com', senha:'joao', senhaTemporaria:true, permissoes: perms
+  });
+}
+async function refreshObrasCache(){
+  try{ obrasCache = await supaListProjects(); }catch(e){ console.error('Obras cache:', e); }
+}
+async function loadSistemaGlobal(){
+  try{
+    const rows = await supaRequest('sistema_global?id=eq.global&select=*', {method:'GET'});
+    if(rows && rows[0] && rows[0].dados){
+      sistemaGlobal = Object.assign({...DEFAULT_SISTEMA_GLOBAL}, rows[0].dados);
+    } else {
+      throw new Error('sem registro global ainda');
+    }
+  }catch(e){
+    try{
+      const raw = localStorage.getItem('qorban_sistema_global');
+      if(raw) sistemaGlobal = Object.assign({...DEFAULT_SISTEMA_GLOBAL}, JSON.parse(raw));
+    }catch(e2){}
+  }
+  nextEscDescricaoId = (sistemaGlobal.escritorioDescricoes||[]).reduce((m,d)=>Math.max(m,d.id||0),0)+1;
+  nextEscCustoId = (sistemaGlobal.escritorioCustos||[]).reduce((m,c)=>Math.max(m,c.id||0),0)+1;
+  nextPatrimonioId = (sistemaGlobal.patrimonio||[]).reduce((m,p)=>Math.max(m,p.id||0),0)+1;
+  nextColaboradorId = (sistemaGlobal.colaboradores||[]).reduce((m,c)=>Math.max(m,c.id||0),0)+1;
+  nextFuncionarioId = (sistemaGlobal.funcionarios||[]).reduce((m,f)=>Math.max(m,f.id||0),0)+1;
+  seedColaboradorPadrao();
+  await refreshObrasCache();
+  renderEmpresaAll();
+  try{ renderDiario(); }catch(e){}
+  saveSistemaGlobal();
+}
+function renderEmpresaAll(){
+  try{ renderEscDescricoes(); renderEscCustos(); }catch(e){ console.error('Escritório:', e); }
+  try{ renderPatrimonio(); }catch(e){ console.error('Patrimônio:', e); }
+  try{ renderColaboradores(); }catch(e){ console.error('Acessos:', e); }
+  try{ renderFuncionarios(); }catch(e){ console.error('Funcionários:', e); }
+}
+
+/* --- Escritório --- */
+function escDescricaoChipHtml(d){
+  return `<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(d.nome)}<button class="icon-btn" style="padding:0;" data-escdescremove="${d.id}" title="Remover">✕</button></span>`;
+}
+function renderEscDescricoes(){
+  const wrap = document.getElementById('escDescricoesChips');
+  if(!wrap) return;
+  wrap.innerHTML = sistemaGlobal.escritorioDescricoes.length ? sistemaGlobal.escritorioDescricoes.map(escDescricaoChipHtml).join('') : '<span class="hint">Nenhuma descrição cadastrada ainda.</span>';
+  wrap.querySelectorAll('[data-escdescremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.escritorioDescricoes = sistemaGlobal.escritorioDescricoes.filter(d=>String(d.id)!==btn.dataset.escdescremove);
+      renderEscDescricoes(); renderEscCustos(); saveSistemaGlobal();
+    });
+  });
+}
+function addEscDescricao(){
+  const nome = (prompt('Nome da descrição (ex: Água, Energia, Internet):')||'').trim();
+  if(!nome) return;
+  sistemaGlobal.escritorioDescricoes.push({id: nextEscDescricaoId++, nome});
+  renderEscDescricoes(); renderEscCustos(); saveSistemaGlobal();
+}
+function escDescOptionsHtml(selected){
+  return `<option value="">—</option>` + sistemaGlobal.escritorioDescricoes.map(d=>`<option ${d.nome===selected?'selected':''}>${escapeXml(d.nome)}</option>`).join('');
+}
+function escCustoRowHtml(c){
+  return `<tr data-esccusto="${c.id}">
+    <td><input type="date" class="cell" data-ecf="data" data-esccusto="${c.id}" value="${c.data||''}"></td>
+    <td><select class="cell" data-ecf="descricao" data-esccusto="${c.id}">${escDescOptionsHtml(c.descricao)}</select></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ecf="valor" data-esccusto="${c.id}" value="${fmtInput(c.valor)}"></td>
+    <td><select class="cell" data-ecf="formaPagto" data-esccusto="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
+    <td><button class="icon-btn" data-esccustoremove="${c.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function renderEscCustos(){
+  const tbody = document.getElementById('tbodyEscCustos');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyEscCustos');
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.escritorioCustos.length ? 'none':'block';
+  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(escCustoRowHtml).join('');
+  tbody.querySelectorAll('[data-ecf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const c = sistemaGlobal.escritorioCustos.find(x=>String(x.id)===el.dataset.esccusto);
+      if(!c) return;
+      const f = el.dataset.ecf;
+      c[f] = f==='valor' ? (parseFloat(el.value)||0) : el.value;
+      renderEscCustosStats(); saveSistemaGlobal();
+    });
+  });
+  tbody.querySelectorAll('[data-esccustoremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.escritorioCustos = sistemaGlobal.escritorioCustos.filter(c=>String(c.id)!==btn.dataset.esccustoremove);
+      renderEscCustos(); saveSistemaGlobal();
+    });
+  });
+  renderEscCustosStats();
+}
+function renderEscCustosStats(){
+  const strip = document.getElementById('escCustosStatsStrip');
+  if(!strip) return;
+  const total = sistemaGlobal.escritorioCustos.reduce((s,c)=>s+(c.valor||0),0);
+  const mesRef = toISO(new Date()).slice(0,7);
+  const mesAtual = sistemaGlobal.escritorioCustos.filter(c=>(c.data||'').slice(0,7)===mesRef).reduce((s,c)=>s+(c.valor||0),0);
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Total lançado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Mês atual</div><div class="val">R$ ${fmtNum(mesAtual,2)}</div></div>
+    <div class="stat"><div class="lbl">Registros</div><div class="val">${sistemaGlobal.escritorioCustos.length}</div></div>
+  `;
+}
+function addEscCusto(){
+  sistemaGlobal.escritorioCustos.push({id: nextEscCustoId++, data: toISO(new Date()), descricao:'', valor:0, formaPagto:'PIX'});
+  renderEscCustos(); saveSistemaGlobal();
+}
+function setupEscritorioTab(){
+  document.getElementById('btnAddEscDescricao').addEventListener('click', addEscDescricao);
+  document.getElementById('btnAddEscCusto').addEventListener('click', addEscCusto);
+}
+
+/* --- Patrimônio --- */
+function patrimonioRowHtml(p){
+  return `<tr data-patr="${p.id}">
+    <td><input type="text" class="cell" data-pf="nome" data-patr="${p.id}" value="${escapeAttr(p.nome)}"></td>
+    <td><select class="cell" data-pf="categoria" data-patr="${p.id}">${PATRIMONIO_CATEGORIAS.map(c=>`<option ${c===p.categoria?'selected':''}>${c}</option>`).join('')}</select></td>
+    <td><input type="date" class="cell" data-pf="dataAquisicao" data-patr="${p.id}" value="${p.dataAquisicao||''}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-pf="valor" data-patr="${p.id}" value="${fmtInput(p.valor)}"></td>
+    <td><input type="text" class="cell" data-pf="fornecedor" data-patr="${p.id}" value="${escapeAttr(p.fornecedor)}"></td>
+    <td><input type="text" class="cell" data-pf="numeroSerie" data-patr="${p.id}" value="${escapeAttr(p.numeroSerie)}"></td>
+    <td><select class="cell" data-pf="status" data-patr="${p.id}">${PATRIMONIO_STATUS.map(s=>`<option ${s===p.status?'selected':''}>${s}</option>`).join('')}</select></td>
+    <td><input type="text" class="cell" data-pf="localizacao" data-patr="${p.id}" value="${escapeAttr(p.localizacao)}"></td>
+    <td><input type="text" class="cell" data-pf="observacoes" data-patr="${p.id}" value="${escapeAttr(p.observacoes)}"></td>
+    <td><button class="icon-btn" data-patrremove="${p.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function renderPatrimonio(){
+  const tbody = document.getElementById('tbodyPatrimonio');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyPatrimonio');
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.patrimonio.length ? 'none':'block';
+  tbody.innerHTML = sistemaGlobal.patrimonio.map(patrimonioRowHtml).join('');
+  tbody.querySelectorAll('[data-pf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const p = sistemaGlobal.patrimonio.find(x=>String(x.id)===el.dataset.patr);
+      if(!p) return;
+      const f = el.dataset.pf;
+      p[f] = f==='valor' ? (parseFloat(el.value)||0) : el.value;
+      renderPatrimonioStats(); saveSistemaGlobal();
+    });
+  });
+  tbody.querySelectorAll('[data-patrremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.patrimonio = sistemaGlobal.patrimonio.filter(p=>String(p.id)!==btn.dataset.patrremove);
+      renderPatrimonio(); saveSistemaGlobal();
+    });
+  });
+  renderPatrimonioStats();
+}
+function renderPatrimonioStats(){
+  const strip = document.getElementById('patrimonioStatsStrip');
+  if(!strip) return;
+  const total = sistemaGlobal.patrimonio.reduce((s,p)=>s+(p.valor||0),0);
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Valor total</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Bens cadastrados</div><div class="val">${sistemaGlobal.patrimonio.length}</div></div>
+  `;
+}
+function addPatrimonio(){
+  sistemaGlobal.patrimonio.push({id: nextPatrimonioId++, nome:'', categoria:'Equipamento', dataAquisicao: toISO(new Date()), valor:0, fornecedor:'', numeroSerie:'', status:'Em uso', localizacao:'', observacoes:''});
+  renderPatrimonio(); saveSistemaGlobal();
+}
+function setupPatrimonioTab(){
+  document.getElementById('btnAddPatrimonio').addEventListener('click', addPatrimonio);
+}
+
+/* --- Acessos (colaboradores + permissões) --- */
+function allFuncoesColaborador(){ return [...FUNCAO_COLAB_BASE, ...(sistemaGlobal.funcoesCustom||[])]; }
+function funcaoOptionsHtml(selected){
+  const opts = allFuncoesColaborador();
+  let extra = '';
+  if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
+  return opts.map(f=>`<option ${f===selected?'selected':''}>${escapeXml(f)}</option>`).join('') + extra + `<option value="__add_funcao__">+ Adicionar novo</option>`;
+}
+function gerarSenhaPadrao(nome){
+  const primeiro = (nome||'').trim().split(/\s+/)[0] || '';
+  return primeiro.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+function colaboradorRowHtml(c){
+  return `<tr data-colab="${c.id}">
+    <td><input type="text" class="cell" data-cbf="nome" data-colab="${c.id}" value="${escapeAttr(c.nome)}"></td>
+    <td><input type="date" class="cell" data-cbf="data" data-colab="${c.id}" value="${c.data||''}"></td>
+    <td><select class="cell" data-cbf="funcao" data-colab="${c.id}">${funcaoOptionsHtml(c.funcao)}</select></td>
+    <td><input type="email" class="cell" data-cbf="email" data-colab="${c.id}" value="${escapeAttr(c.email)}"></td>
+    <td><span class="badge ${c.senhaTemporaria?'warn':'ok'}" style="font-family:var(--mono)" title="${c.senhaTemporaria?'Senha padrão — precisa trocar no 1º acesso':'Senha já alterada'}">${escapeXml(c.senha)}${c.senhaTemporaria?' ⚠':''}</span></td>
+    <td><button class="icon-btn" data-colabremove="${c.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindColaboradorEvents(){
+  document.querySelectorAll('#tblColaboradores [data-cbf]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const c = sistemaGlobal.colaboradores.find(x=>String(x.id)===el.dataset.colab);
+      if(!c) return;
+      const f = el.dataset.cbf;
+      if(f==='funcao' && el.value==='__add_funcao__'){
+        const novo = (prompt('Nome da nova função:')||'').trim();
+        if(novo){
+          sistemaGlobal.funcoesCustom = sistemaGlobal.funcoesCustom || [];
+          if(!allFuncoesColaborador().includes(novo)) sistemaGlobal.funcoesCustom.push(novo);
+          c.funcao = novo;
+        }
+        renderColaboradores(); saveSistemaGlobal();
+        return;
+      }
+      if(f==='nome'){
+        c.nome = el.value;
+        if(c.senhaTemporaria) c.senha = gerarSenhaPadrao(el.value) || c.senha;
+      } else {
+        c[f] = el.value;
+      }
+      renderColaboradores(); saveSistemaGlobal();
+    });
+  });
+  document.querySelectorAll('[data-colabremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.colaboradores = sistemaGlobal.colaboradores.filter(c=>String(c.id)!==btn.dataset.colabremove);
+      renderColaboradores(); saveSistemaGlobal();
+    });
+  });
+}
+function renderColaboradores(){
+  const tbody = document.getElementById('tbodyColaboradores');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyColaboradores');
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.colaboradores.length ? 'none':'block';
+  tbody.innerHTML = sistemaGlobal.colaboradores.map(colaboradorRowHtml).join('');
+  bindColaboradorEvents();
+  renderPermissoes();
+}
+function addColaborador(){
+  const nome = (prompt('Nome do funcionário:')||'').trim();
+  if(!nome) return;
+  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]=false);
+  sistemaGlobal.colaboradores.push({id: nextColaboradorId++, nome, data: toISO(new Date()), funcao:'Estagiário', email:'', senha: gerarSenhaPadrao(nome), senhaTemporaria:true, permissoes: perms});
+  renderColaboradores(); saveSistemaGlobal();
+}
+function renderPermissoes(){
+  const thead = document.getElementById('theadPermissoes');
+  const tbody = document.getElementById('tbodyPermissoes');
+  const emptyEl = document.getElementById('emptyPermissoes');
+  if(!thead || !tbody) return;
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.colaboradores.length ? 'none':'block';
+  thead.innerHTML = `<th style="min-width:140px;">Funcionário</th>` + SYSTEM_PAGES.map(p=>`<th style="width:66px;text-align:center;font-size:9.5px;">${p.label}</th>`).join('');
+  tbody.innerHTML = sistemaGlobal.colaboradores.map(c=>{
+    if(!c.permissoes) c.permissoes = {};
+    return `<tr><td>${escapeXml(c.nome)}</td>` + SYSTEM_PAGES.map(p=>`<td style="text-align:center;"><input type="checkbox" data-permcolab="${c.id}" data-permpage="${p.id}" ${c.permissoes[p.id]?'checked':''}></td>`).join('') + `</tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-permcolab]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const c = sistemaGlobal.colaboradores.find(x=>String(x.id)===el.dataset.permcolab);
+      if(!c) return;
+      if(!c.permissoes) c.permissoes = {};
+      c.permissoes[el.dataset.permpage] = el.checked;
+      saveSistemaGlobal();
+    });
+  });
+}
+function setupAcessosTab(){
+  document.getElementById('btnAddColaborador').addEventListener('click', addColaborador);
+}
+
+/* --- Funcionários --- */
+function allFuncoesOperario(){ return [...FUNCOES_OPERARIO_BASE, ...(sistemaGlobal.funcoesOperarioCustom||[])]; }
+function funcaoOperarioOptionsHtml(selected){
+  const opts = allFuncoesOperario();
+  let extra = '';
+  if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
+  return opts.map(f=>`<option ${f===selected?'selected':''}>${escapeXml(f)}</option>`).join('') + extra + `<option value="__add_funcao_op__">+ Adicionar novo</option>`;
+}
+function obraOptionsHtml(selected){
+  return `<option value="">—</option>` + obrasCache.map(o=>`<option value="${o.id}" ${o.id===selected?'selected':''}>${escapeXml(o.nome||'(sem nome)')}</option>`).join('');
+}
+function salarioFuncaoRowHtml(funcao){
+  const val = sistemaGlobal.salariosPorFuncao[funcao];
+  return `<tr data-salfuncao="${escapeAttr(funcao)}">
+    <td>${escapeXml(funcao)}</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-salval data-salfuncao="${escapeAttr(funcao)}" value="${val?fmtInput(val):''}" placeholder="0,00"></td>
+  </tr>`;
+}
+function renderSalariosFuncao(){
+  const tbody = document.getElementById('tbodySalariosFuncao');
+  if(!tbody) return;
+  tbody.innerHTML = allFuncoesOperario().map(salarioFuncaoRowHtml).join('');
+  tbody.querySelectorAll('[data-salval]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      sistemaGlobal.salariosPorFuncao[el.dataset.salfuncao] = parseFloat(el.value)||0;
+      renderFuncionarios();
+      saveSistemaGlobal();
+    });
+  });
+}
+function funcionarioRowHtml(f){
+  const salario = sistemaGlobal.salariosPorFuncao[f.funcao];
+  return `<tr data-func="${f.id}">
+    <td><input type="text" class="cell" data-ff="nome" data-func="${f.id}" value="${escapeAttr(f.nome)}"></td>
+    <td><input type="text" class="cell" data-ff="endereco" data-func="${f.id}" value="${escapeAttr(f.endereco)}"></td>
+    <td><input type="text" class="cell" data-ff="cpf" data-func="${f.id}" value="${escapeAttr(f.cpf)}"></td>
+    <td><input type="text" class="cell" data-ff="rg" data-func="${f.id}" value="${escapeAttr(f.rg)}"></td>
+    <td><input type="text" class="cell" data-ff="ctps" data-func="${f.id}" value="${escapeAttr(f.ctps)}"></td>
+    <td><select class="cell" data-ff="funcao" data-func="${f.id}">${funcaoOperarioOptionsHtml(f.funcao)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${salario?('R$ '+fmtNum(salario,2)):'<span class="hint">definir na tabela</span>'}</td>
+    <td><select class="cell" data-ff="obraId" data-func="${f.id}">${obraOptionsHtml(f.obraId)}</select></td>
+    <td><button class="icon-btn" data-funcremove="${f.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function renderFuncionarios(){
+  renderSalariosFuncao();
+  const tbody = document.getElementById('tbodyFuncionarios');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyFuncionarios');
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.funcionarios.length ? 'none':'block';
+  tbody.innerHTML = sistemaGlobal.funcionarios.map(funcionarioRowHtml).join('');
+  tbody.querySelectorAll('[data-ff]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===el.dataset.func);
+      if(!f) return;
+      const fld = el.dataset.ff;
+      if(fld==='funcao' && el.value==='__add_funcao_op__'){
+        const novo = (prompt('Nome da nova função:')||'').trim();
+        if(novo){
+          sistemaGlobal.funcoesOperarioCustom = sistemaGlobal.funcoesOperarioCustom || [];
+          if(!allFuncoesOperario().includes(novo)) sistemaGlobal.funcoesOperarioCustom.push(novo);
+          f.funcao = novo;
+        }
+        renderFuncionarios(); saveSistemaGlobal();
+        return;
+      }
+      f[fld] = el.value;
+      renderFuncionarios(); saveSistemaGlobal();
+    });
+  });
+  tbody.querySelectorAll('[data-funcremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.funcionarios = sistemaGlobal.funcionarios.filter(f=>String(f.id)!==btn.dataset.funcremove);
+      renderFuncionarios(); saveSistemaGlobal();
+    });
+  });
+}
+function addFuncionario(){
+  const nome = (prompt('Nome do funcionário:')||'').trim();
+  if(!nome) return;
+  sistemaGlobal.funcionarios.push({id: nextFuncionarioId++, nome, endereco:'', cpf:'', rg:'', ctps:'', funcao: FUNCOES_OPERARIO_BASE[0], obraId: currentProjectId||''});
+  renderFuncionarios(); saveSistemaGlobal();
+}
+async function setupFuncionariosTab(){
+  document.getElementById('btnAddFuncionario').addEventListener('click', addFuncionario);
+  await refreshObrasCache();
+  renderFuncionarios();
+}
+
+/* --- Consolidação --- */
+let consolidacaoObras = [];
+let consolidacaoChart = null;
+let expectativaChart = null;
+let extratoLinhas = [];
+
+function computeObraKpis(row){
+  const d = row.dados || {};
+  const orcamentoObra = d.orcamento || [];
+  const comprasObra = d.compras || [];
+  const recebimentosObra = d.recebimentos || [];
+  const bdiMul = 1 + ((d.bdiPercent||0)/100);
+  const subitensObra = orcamentoObra.filter(r=>r.level==='subitem');
+  const totalOrcado = subitensObra.reduce((s,r)=>s+((r.totalMdoSemBdi||0)+(r.totalMatSemBdi||0)+(r.totalEquipSemBdi||0)),0)*bdiMul;
+  const totalSaidas = comprasObra.reduce((s,c)=>s+(c.valorTotal||0),0);
+  const totalEntradas = recebimentosObra.reduce((s,r)=>s+(r.valor||0),0);
+  const saldo = totalEntradas - totalSaidas;
+  let andamento = 0;
+  const comDatas = subitensObra.filter(r=>r.start && r.end);
+  if(comDatas.length){
+    const starts = comDatas.map(r=>new Date(r.start)).filter(dt=>!isNaN(dt));
+    const ends = comDatas.map(r=>new Date(r.end)).filter(dt=>!isNaN(dt));
+    if(starts.length && ends.length){
+      const projStart = new Date(Math.min(...starts));
+      const projEnd = new Date(Math.max(...ends));
+      const hoje = new Date();
+      if(hoje<=projStart) andamento = 0;
+      else if(hoje>=projEnd) andamento = 100;
+      else if(projEnd>projStart) andamento = ((hoje-projStart)/(projEnd-projStart))*100;
+    }
+  }
+  return { id: row.id, nome: d.config?.nome || row.nome || 'Obra sem nome', totalOrcado, totalEntradas, totalSaidas, saldo, andamento, compras: comprasObra, recebimentos: recebimentosObra };
+}
+async function refreshConsolidacao(){
+  try{
+    const rows = await supaListProjectsFull();
+    consolidacaoObras = (rows||[]).map(computeObraKpis);
+    renderConsolidacao();
+    showToast('Dados de todas as obras atualizados.');
+  }catch(e){
+    console.error(e);
+    showToast('Não consegui buscar as obras agora (verifique a conexão).');
+  }
+}
+function renderConsolidacao(){
+  const totalObras = consolidacaoObras.length;
+  const andamentoMedio = totalObras ? consolidacaoObras.reduce((s,o)=>s+o.andamento,0)/totalObras : 0;
+  const totalEntradas = consolidacaoObras.reduce((s,o)=>s+o.totalEntradas,0);
+  const totalSaidasObras = consolidacaoObras.reduce((s,o)=>s+o.totalSaidas,0);
+  const totalEscritorio = (sistemaGlobal.escritorioCustos||[]).reduce((s,c)=>s+(c.valor||0),0);
+  const totalPatrimonio = (sistemaGlobal.patrimonio||[]).reduce((s,p)=>s+(p.valor||0),0);
+  const saldoConsolidado = totalEntradas - totalSaidasObras - totalEscritorio - totalPatrimonio;
+  const lucroEstimado = consolidacaoObras.reduce((s,o)=>s+(o.totalOrcado - o.totalSaidas),0) - totalEscritorio;
+
+  const strip = document.getElementById('consolidacaoStatsStrip');
+  if(strip){
+    strip.innerHTML = `
+      <div class="stat"><div class="lbl">Obras</div><div class="val">${totalObras}</div></div>
+      <div class="stat"><div class="lbl">Andamento médio</div><div class="val">${fmtNum(andamentoMedio,0)}%</div></div>
+      <div class="stat"><div class="lbl">Entradas (todas obras)</div><div class="val">R$ ${fmtNum(totalEntradas,2)}</div></div>
+      <div class="stat"><div class="lbl">Saídas (obras+escritório+patrim.)</div><div class="val">R$ ${fmtNum(totalSaidasObras+totalEscritorio+totalPatrimonio,2)}</div></div>
+      <div class="stat accent"><div class="lbl">Saldo consolidado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(saldoConsolidado,2)}</div></div>
+      <div class="stat accent"><div class="lbl">Lucro estimado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(lucroEstimado,2)}</div></div>
+    `;
+  }
+  const tbody = document.getElementById('tbodyConsolidacaoObras');
+  const emptyEl = document.getElementById('emptyConsolidacaoObras');
+  if(tbody){
+    if(emptyEl) emptyEl.style.display = consolidacaoObras.length ? 'none':'block';
+    tbody.innerHTML = consolidacaoObras.map(o=>`<tr>
+      <td>${escapeXml(o.nome)}</td>
+      <td class="num">${fmtNum(o.andamento,0)}%</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(o.totalOrcado,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--green)">${fmtNum(o.totalEntradas,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--red)">${fmtNum(o.totalSaidas,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(o.saldo,2)}</td>
+    </tr>`).join('');
+  }
+  renderConsolidacaoChart();
+  renderExpectativaSaldoChart();
+  if(extratoLinhas.length) renderConciliacao();
+}
+function renderConsolidacaoChart(){
+  const canvas = document.getElementById('chartConsolidacaoObras');
+  if(consolidacaoChart){ consolidacaoChart.destroy(); consolidacaoChart=null; }
+  if(!canvas || typeof Chart==='undefined' || !consolidacaoObras.length) return;
+  consolidacaoChart = new Chart(canvas.getContext('2d'), {
+    type:'bar',
+    data:{ labels: consolidacaoObras.map(o=>truncate(o.nome,18)), datasets:[
+      {label:'Entradas', data: consolidacaoObras.map(o=>o.totalEntradas), backgroundColor:'#6fbf8b'},
+      {label:'Saídas', data: consolidacaoObras.map(o=>o.totalSaidas), backgroundColor:'#d9695b'},
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ ticks:{color:'#b7c0cb', font:{size:10}}, grid:{color:'#232a33'} }, y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} } },
+      plugins:{ legend:{labels:{color:'#e7ebef'}}, tooltip:{ callbacks:{ label:ctx=>ctx.dataset.label+': R$ '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function computeExpectativaEventos(){
+  const eventos = [];
+  consolidacaoObras.forEach(o=>{
+    (o.recebimentos||[]).forEach(r=>{ if(r.data) eventos.push({data:r.data, valor:r.valor||0, origem:o.nome+' · recebimento'}); });
+    (o.compras||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valorTotal||0), origem:o.nome+' · compra'}); });
+  });
+  (sistemaGlobal.escritorioCustos||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valor||0), origem:'Escritório · '+(c.descricao||'custo')}); });
+  (sistemaGlobal.patrimonio||[]).forEach(p=>{ if(p.dataAquisicao) eventos.push({data:p.dataAquisicao, valor:-(p.valor||0), origem:'Patrimônio · '+(p.nome||'bem')}); });
+  return eventos.sort((a,b)=>a.data.localeCompare(b.data));
+}
+function renderExpectativaSaldoChart(){
+  const canvas = document.getElementById('chartExpectativaSaldo');
+  if(expectativaChart){ expectativaChart.destroy(); expectativaChart=null; }
+  if(!canvas || typeof Chart==='undefined') return;
+  const eventos = computeExpectativaEventos();
+  if(!eventos.length) return;
+  const byDate = {};
+  eventos.forEach(e=>{ byDate[e.data] = (byDate[e.data]||0) + e.valor; });
+  const dates = Object.keys(byDate).sort();
+  let acc=0; const labels=[], values=[];
+  dates.forEach(d=>{ acc+=byDate[d]; labels.push(fmtDate(d)); values.push(acc); });
+  expectativaChart = new Chart(canvas.getContext('2d'), {
+    type:'line',
+    data:{ labels, datasets:[{label:'Saldo esperado (R$)', data:values, borderColor:'#e8a33d', backgroundColor:'rgba(232,163,61,0.15)', fill:true, tension:0.2, pointRadius:2}] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ ticks:{color:'#b7c0cb', font:{size:10}, maxRotation:60, minRotation:30}, grid:{color:'#232a33'} }, y:{ ticks:{color:'#b7c0cb', callback:v=>'R$ '+fmtNum(v,0)}, grid:{color:'#232a33'} } },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>'Saldo: R$ '+fmtNum(ctx.parsed.y,2) } } }
+    }
+  });
+}
+function parseExtratoCsv(text){
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length);
+  if(!lines.length) return [];
+  const sep = lines[0].includes(';') ? ';' : ',';
+  let start = 0;
+  const firstCols = lines[0].split(sep).map(c=>c.trim().toLowerCase());
+  if(firstCols.some(c=>c.includes('data')||c.includes('valor')||c.includes('descri'))) start = 1;
+  const out = [];
+  for(let i=start;i<lines.length;i++){
+    const cols = lines[i].split(sep).map(c=>c.trim().replace(/^"|"$/g,''));
+    if(cols.length<3) continue;
+    const dataRaw = cols[0];
+    const descricao = cols[1];
+    const valorRaw = cols[2].replace(/[R$\s]/g,'').replace(/\.(?=\d{3}(?:\D|$))/g,'').replace(',','.');
+    const valor = parseFloat(valorRaw);
+    if(isNaN(valor)) continue;
+    let data = dataRaw;
+    const m = dataRaw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if(m) data = `${m[3]}-${m[2]}-${m[1]}`;
+    out.push({data, descricao, valor});
+  }
+  return out;
+}
+function onExtratoFileSelected(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('extratoStatus');
+  if(statusEl) statusEl.textContent = 'lendo arquivo…';
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      extratoLinhas = parseExtratoCsv(String(reader.result));
+      if(statusEl) statusEl.textContent = `${extratoLinhas.length} lançamento(s) lido(s) de "${file.name}"`;
+      renderConciliacao();
+    }catch(err){
+      console.error(err);
+      if(statusEl) statusEl.textContent = 'não consegui ler esse arquivo — confira se é um CSV com data, descrição e valor.';
+    }
+  };
+  reader.readAsText(file, 'utf-8');
+}
+function renderConciliacao(){
+  const tbody = document.getElementById('tbodyConciliacao');
+  const emptyEl = document.getElementById('emptyConciliacao');
+  if(!tbody) return;
+  if(emptyEl) emptyEl.style.display = extratoLinhas.length ? 'none':'block';
+  const eventos = computeExpectativaEventos().map(e=>({...e, _used:false}));
+  tbody.innerHTML = extratoLinhas.map(l=>{
+    const match = eventos.find(e=> !e._used && e.data===l.data && Math.abs(Math.abs(e.valor)-Math.abs(l.valor))<0.05);
+    if(match) match._used = true;
+    const situacao = match ? '<span class="badge ok">conciliado</span>' : '<span class="badge warn">pendente</span>';
+    return `<tr><td>${fmtDate(l.data)}</td><td>${escapeXml(l.descricao)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(l.valor,2)}</td><td>${situacao}</td></tr>`;
+  }).join('');
+}
+function setupConsolidacaoTab(){
+  document.getElementById('btnRefreshConsolidacao').addEventListener('click', refreshConsolidacao);
+  document.getElementById('extratoFileInput').addEventListener('change', onExtratoFileSelected);
+}
+
+/* ============================================================
+   17. PERSISTÊNCIA (Supabase)
    ============================================================ */
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_psFslciJm9QIZTBkCiF77Q_SxA0hTaA';
@@ -2542,9 +3432,17 @@ async function supaUpsertProject(row){
   return supaRequest('projetos', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
 }
 async function supaDeleteProject(id){ return supaRequest(`projetos?id=eq.${id}`, {method:'DELETE'}); }
+async function supaListAcabamentosSistema(){ return supaRequest('acabamentos_sistema?select=*&order=nome.asc', {method:'GET'}); }
+async function supaUpsertAcabamentoSistema(row){
+  return supaRequest('acabamentos_sistema', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
+}
+async function supaListProjectsFull(){ return supaRequest('projetos?select=id,nome,dados,atualizado_em', {method:'GET'}); }
+async function supaUpsertSistemaGlobal(row){
+  return supaRequest('sistema_global', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
+}
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), bancos: [...bancos], recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -2558,7 +3456,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, bancos: payload.bancos, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -2588,6 +3486,13 @@ function applyProjectPayload(payload){
   nextAlvenariaId = alvenariaRows.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
   muroRows = payload.muroRows || [];
   nextMuroId = muroRows.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
+  customRevestTipos = payload.customRevestTipos || [];
+  diarioObra = payload.diarioObra || [];
+  nextDiarioId = diarioObra.reduce((m,d)=>Math.max(m,d.id||0), 0) + 1;
+  nextDiarioSubId = diarioObra.reduce((m,d)=>{
+    const subMax = [...(d.efetivo||[]), ...(d.entradaMateriais||[]), ...(d.saidaMateriais||[])].reduce((mm,r)=>Math.max(mm,r.id||0),0);
+    return Math.max(m, subMax);
+  }, 0) + 1;
 }
 async function refreshProjectSelect(){
   const sel = document.getElementById('projectSelect');
@@ -2606,7 +3511,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -2617,7 +3522,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -2637,7 +3542,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, bancos: row.dados?.bancos, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -2647,7 +3552,8 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+  try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
 
@@ -2676,7 +3582,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; bancos = []; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }
@@ -2707,6 +3613,7 @@ function setupTabs(){
       if(btn.dataset.tab==='dashboard') setTimeout(renderDashboardAll, 30);
       if(btn.dataset.tab==='recursos') setTimeout(renderRecursos, 30);
       if(btn.dataset.tab==='fluxocaixa') setTimeout(renderFluxoCaixaAll, 30);
+      if(btn.dataset.tab==='consolidacao') setTimeout(renderConsolidacao, 30);
       document.getElementById('sidebar').classList.remove('open');
     });
   });
@@ -2754,10 +3661,17 @@ function setupTopbar(){
   setupFluxoCaixaTab();
   setupComposicoesTab();
   setupQuantitativosTab();
+  setupEscritorioTab();
+  setupPatrimonioTab();
+  setupConsolidacaoTab();
+  setupAcessosTab();
+  setupDiarioTab();
+  await setupFuncionariosTab();
   setupGanttToggle();
   setupConfigTab();
   await loadSinapi();
   const had = await loadProject();
+  loadSistemaGlobal();
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   if(!had) applyConfig({nome:'Jardins di Roma · Módulo 4', createdAt: new Date().toISOString()});

@@ -700,18 +700,18 @@ tr[draggable="true"]{cursor:default;}
       </div>
       <div class="panel" id="panel-estoque">
         <div class="card">
-          <h2><span class="tag">estoque</span>Materiais em estoque</h2>
-          <p class="desc">Todo material registrado em Compras entra automaticamente aqui. Registre o uso para acompanhar o saldo restante de cada material na obra.</p>
+          <h2><span class="tag">estoque</span>Materiais e equipamentos em estoque</h2>
+          <p class="desc">Todo material e equipamento registrado em Compras entra automaticamente aqui. Registre o uso para acompanhar o saldo restante, ou transfira o saldo para outra obra ativa.</p>
           <div class="tbl-wrap">
             <table id="tblEstoque"><thead><tr>
-              <th>Material</th><th style="width:70px;">Unid.</th>
+              <th>Material/Equipamento</th><th style="width:100px;">Tipo</th><th style="width:70px;">Unid.</th>
               <th class="num" style="width:100px;">Comprado</th><th class="num" style="width:100px;">Usado</th>
-              <th class="num" style="width:100px;">Saldo</th><th style="width:130px;"></th>
+              <th class="num" style="width:100px;">Saldo</th><th style="width:230px;"></th>
             </tr></thead><tbody id="tbodyEstoque"></tbody></table>
           </div>
           <div class="empty-state" id="emptyEstoque" style="display:none;">
-            <div class="big">Nenhum material comprado ainda</div>
-            Registre compras do tipo "Material" na aba Compras para vê-los aqui.
+            <div class="big">Nada comprado ainda</div>
+            Registre compras do tipo "Material" ou "Equipamento" na aba Compras para vê-los aqui.
           </div>
         </div>
         <div class="card">
@@ -1070,6 +1070,20 @@ tr[draggable="true"]{cursor:default;}
           </div>
         </div>
         <div class="card">
+          <h2><span class="tag">todas as obras</span>Compras consolidadas</h2>
+          <p class="desc">Todas as compras registradas em todas as obras, por data.</p>
+          <div class="tbl-wrap"><table class="qtbl zebra" id="tblComprasConsolidadas">
+            <thead><tr>
+              <th style="width:110px;">Data</th>
+              <th style="min-width:160px;">Loja</th>
+              <th style="width:120px;" class="num">Valor (R$)</th>
+              <th style="min-width:150px;">Obra</th>
+            </tr></thead>
+            <tbody id="tbodyComprasConsolidadas"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyComprasConsolidadas" style="display:none;padding:20px;">Nenhuma compra encontrada ainda. Clique em "Atualizar" acima.</div>
+        </div>
+        <div class="card">
           <h2><span class="tag">conta</span>Expectativa de saldo em conta</h2>
           <p class="desc">Recebimentos e saídas (compras de obras + custos do escritório + aquisições de patrimônio) de todo o sistema, em ordem cronológica.</p>
           <div style="position:relative;height:260px;">
@@ -1136,9 +1150,11 @@ tr[draggable="true"]{cursor:default;}
             <button class="btn small primary" id="btnAddDiario">+ Novo registro</button>
           </div>
           <p class="desc">Um registro por dia, com efetivo de funcionários, clima, atividades realizadas e movimentação de materiais.</p>
+          <input type="text" class="cell" id="diarioSearchInput" placeholder="🔎 Buscar em qualquer informação do diário (nome, atividade, material, ocorrência...)">
         </div>
         <div id="diarioEntriesWrap"></div>
         <div class="empty-state" id="emptyDiario" style="display:none;padding:30px;">Nenhum registro de diário ainda. Clique em "+ Novo registro" para começar.</div>
+        <div class="empty-state" id="diarioNoResults" style="display:none;padding:30px;">Nenhum registro encontrado para essa busca.</div>
       </div>
 
       <!-- ===================== PRODUÇÃO ===================== -->
@@ -1153,15 +1169,27 @@ tr[draggable="true"]{cursor:default;}
       <div class="panel" id="panel-funcionarios">
         <div class="card">
           <h2><span class="tag">empresa</span>Funcionários</h2>
-          <p class="desc">Cadastro de funcionários da construtora (obra e escritório). Dado da empresa, compartilhado entre todas as obras.</p>
+          <p class="desc">Cadastro de funcionários da construtora (obra e escritório). Dado da empresa, compartilhado entre todas as obras. Clique no nome de um funcionário para ver/editar o cadastro completo.</p>
         </div>
         <div class="card">
-          <h2><span class="tag">salários</span>Tabela de salários por função</h2>
-          <p class="desc">Defina o valor salarial de cada função. O salário do funcionário é sempre puxado desta tabela, de acordo com a função dele.</p>
-          <div class="tbl-wrap"><table class="qtbl zebra" id="tblSalariosFuncao">
-            <thead><tr><th style="min-width:220px;">Função</th><th style="width:150px;" class="num">Salário (R$)</th></tr></thead>
-            <tbody id="tbodySalariosFuncao"></tbody>
-          </table></div>
+          <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+            <div style="flex:1;min-width:300px;">
+              <h2 style="margin-bottom:4px;"><span class="tag">salários</span>Salários por função</h2>
+              <p class="desc">Defina o valor salarial de cada função. O salário do funcionário é sempre puxado desta tabela.</p>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblSalariosFuncao">
+                <thead><tr><th style="min-width:180px;">Função</th><th style="width:130px;" class="num">Salário (R$)</th></tr></thead>
+                <tbody id="tbodySalariosFuncao"></tbody>
+              </table></div>
+            </div>
+            <div style="flex:1;min-width:300px;">
+              <h2 style="margin-bottom:4px;"><span class="tag">efetivo</span>Efetivo por obra</h2>
+              <p class="desc">Quantidade de funcionários por função, em cada obra ativa.</p>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEfetivoObra">
+                <thead><tr id="theadEfetivoObra"></tr></thead>
+                <tbody id="tbodyEfetivoObra"></tbody>
+              </table></div>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="toolbar-row">
@@ -1170,14 +1198,9 @@ tr[draggable="true"]{cursor:default;}
           </div>
           <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblFuncionarios">
             <thead><tr>
-              <th style="min-width:150px;">Nome</th>
-              <th style="min-width:180px;">Endereço</th>
-              <th style="width:120px;">CPF</th>
-              <th style="width:100px;">RG</th>
-              <th style="width:100px;">CTPS</th>
+              <th style="min-width:180px;">Nome</th>
               <th style="width:170px;">Função</th>
-              <th style="width:110px;" class="num">Salário (R$)</th>
-              <th style="min-width:140px;">Obra</th>
+              <th style="min-width:150px;">Obra/Status</th>
               <th style="width:34px;"></th>
             </tr></thead>
             <tbody id="tbodyFuncionarios"></tbody>

@@ -1988,16 +1988,22 @@ function setupComposicoesTab(){
    ============================================================ */
 let estoqueConsumos = [];
 let nextEstoqueConsumoId = 1;
+let estoqueTransferenciasRecebidas = [];
 
-function estoqueKeyFor(desc, unidade){
-  return (desc||'').trim().toLowerCase()+'|'+(unidade||'').trim().toLowerCase();
+function estoqueKeyFor(desc, unidade, tipo){
+  return (tipo||'').trim().toLowerCase()+'|'+(desc||'').trim().toLowerCase()+'|'+(unidade||'').trim().toLowerCase();
 }
 function computeEstoqueGroups(){
   const groups = {};
-  compras.filter(c=>c.tipo==='Material' && (c.descricao||'').trim()).forEach(c=>{
-    const key = estoqueKeyFor(c.descricao, c.unidade);
-    if(!groups[key]) groups[key] = {key, nome:c.descricao.trim(), unidade:c.unidade||'', comprado:0, gasto:0};
+  compras.filter(c=>(c.tipo==='Material'||c.tipo==='Equipamento') && (c.descricao||'').trim()).forEach(c=>{
+    const key = estoqueKeyFor(c.descricao, c.unidade, c.tipo);
+    if(!groups[key]) groups[key] = {key, nome:c.descricao.trim(), unidade:c.unidade||'', tipo:c.tipo, comprado:0, gasto:0};
     groups[key].comprado += (c.quantidade||0);
+  });
+  (estoqueTransferenciasRecebidas||[]).forEach(t=>{
+    const key = estoqueKeyFor(t.nome, t.unidade, t.tipo);
+    if(!groups[key]) groups[key] = {key, nome:t.nome, unidade:t.unidade||'', tipo:t.tipo||'Material', comprado:0, gasto:0};
+    groups[key].comprado += (t.quantidade||0);
   });
   estoqueConsumos.forEach(u=>{
     if(!groups[u.materialKey]) return;
@@ -2015,15 +2021,19 @@ function renderEstoque(){
     const cls = g.saldo<=0.0001 ? 'crit' : (g.comprado>0 && g.saldo < g.comprado*0.15 ? 'warn' : 'ok');
     return `<tr>
       <td>${escapeXml(g.nome)}</td>
+      <td><span class="badge ok">${escapeXml(g.tipo)}</span></td>
       <td>${escapeXml(g.unidade)}</td>
       <td class="num" style="font-family:var(--mono)">${fmtNum(g.comprado,2)}</td>
       <td class="num" style="font-family:var(--mono)">${fmtNum(g.gasto,2)}</td>
       <td class="num"><span class="badge ${cls}" style="font-family:var(--mono)">${fmtNum(g.saldo,2)}</span></td>
-      <td><button class="btn small" data-estuse="${escapeAttr(g.key)}">Registrar uso</button></td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;"><button class="btn small" data-estuse="${escapeAttr(g.key)}">Registrar uso</button><button class="btn small" data-esttransfer="${escapeAttr(g.key)}">Transferir</button></td>
     </tr>`;
   }).join('');
   tbody.querySelectorAll('[data-estuse]').forEach(btn=>{
     btn.addEventListener('click', ()=> registrarUsoEstoque(btn.dataset.estuse));
+  });
+  tbody.querySelectorAll('[data-esttransfer]').forEach(btn=>{
+    btn.addEventListener('click', ()=> transferirEstoque(btn.dataset.esttransfer));
   });
   renderEstoqueConsumosList(groups);
 }
@@ -2033,9 +2043,40 @@ function registrarUsoEstoque(key){
   const qty = parseFloat(qtyStr.replace(',','.'));
   if(!qty || qty<=0){ alert('Quantidade inválida.'); return; }
   const dataStr = prompt('Data de uso (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
-  estoqueConsumos.push({id:nextEstoqueConsumoId++, materialKey:key, quantidade:qty, data:dataStr});
+  estoqueConsumos.push({id:nextEstoqueConsumoId++, materialKey:key, quantidade:qty, data:dataStr, motivo:'Uso na obra'});
   renderEstoque();
   saveProject();
+}
+async function transferirEstoque(key){
+  if(!obrasCache.length) await refreshObrasCache();
+  const outras = obrasCache.filter(o=>o.id!==currentProjectId);
+  if(!outras.length){ showToast('Não há outra obra ativa para transferir.'); return; }
+  const nomes = outras.map((o,i)=>`${i+1}. ${o.nome||'(sem nome)'}`).join('\n');
+  const escolha = prompt(`Transferir para qual obra? Digite o número:\n${nomes}`);
+  const idx = parseInt(escolha,10)-1;
+  if(isNaN(idx) || !outras[idx]) return;
+  const destino = outras[idx];
+  const qtyStr = prompt('Quantidade a transferir:');
+  if(qtyStr===null) return;
+  const qty = parseFloat(qtyStr.replace(',','.'));
+  if(!qty || qty<=0){ alert('Quantidade inválida.'); return; }
+  const g = computeEstoqueGroups().find(x=>x.key===key);
+  if(!g) return;
+  const dataStr = toISO(new Date());
+  estoqueConsumos.push({id:nextEstoqueConsumoId++, materialKey:key, quantidade:qty, data:dataStr, motivo:`Transferência → ${destino.nome}`});
+  renderEstoque();
+  saveProject();
+  try{
+    const rows = await supaRequest(`projetos?id=eq.${destino.id}&select=id,nome,dados`, {method:'GET'});
+    const destDados = (rows && rows[0] && rows[0].dados) || {};
+    destDados.estoqueTransferenciasRecebidas = destDados.estoqueTransferenciasRecebidas || [];
+    destDados.estoqueTransferenciasRecebidas.push({id: Date.now(), nome:g.nome, unidade:g.unidade, tipo:g.tipo, quantidade:qty, data:dataStr, origemObraNome: (collectConfig().nome||'esta obra')});
+    await supaRequest('projetos', {method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify({id:destino.id, dados:destDados, atualizado_em:new Date().toISOString()})});
+    showToast(`${fmtNum(qty,2)} ${g.unidade||''} de "${g.nome}" transferido(a) para ${destino.nome}.`);
+  }catch(e){
+    console.error(e);
+    showToast('Baixa registrada aqui, mas não consegui atualizar a obra de destino (verifique a conexão).');
+  }
 }
 function renderEstoqueConsumosList(groups){
   const wrap = document.getElementById('estoqueConsumosList');
@@ -2044,8 +2085,8 @@ function renderEstoqueConsumosList(groups){
   const nameByKey = {};
   (groups||computeEstoqueGroups()).forEach(g=>{ nameByKey[g.key] = g.nome + (g.unidade?` (${g.unidade})`:''); });
   const sorted = [...estoqueConsumos].sort((a,b)=>(b.data||'').localeCompare(a.data||''));
-  wrap.innerHTML = `<div class="tbl-wrap"><table><thead><tr><th style="width:110px;">Data</th><th>Material</th><th class="num" style="width:110px;">Quant. usada</th><th style="width:34px;"></th></tr></thead><tbody>
-    ${sorted.map(u=>`<tr><td>${fmtDate(u.data)}</td><td>${escapeXml(nameByKey[u.materialKey]||u.materialKey)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(u.quantidade,2)}</td><td><button class="icon-btn" data-estremove="${u.id}" title="Remover">✕</button></td></tr>`).join('')}
+  wrap.innerHTML = `<div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:110px;">Data</th><th>Material/Equipamento</th><th class="num" style="width:110px;">Quant.</th><th style="min-width:150px;">Motivo</th><th style="width:34px;"></th></tr></thead><tbody>
+    ${sorted.map(u=>`<tr><td>${fmtDate(u.data)}</td><td>${escapeXml(nameByKey[u.materialKey]||u.materialKey)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(u.quantidade,2)}</td><td>${escapeXml(u.motivo||'Uso na obra')}</td><td><button class="icon-btn" data-estremove="${u.id}" title="Remover">✕</button></td></tr>`).join('')}
   </tbody></table></div>`;
   wrap.querySelectorAll('[data-estremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -2644,27 +2685,46 @@ function efetivoRowHtml(entryId, r){
   const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(r.funcionarioId));
   const nome = f ? f.nome : '(funcionário removido)';
   const funcao = f ? f.funcao : '';
-  const presente = r.manha || r.tarde;
+  const situacao = r.atestado ? 'Atestado' : (r.faltaJustificada ? 'Falta justificada' : ((r.manha||r.tarde) ? 'Presente' : 'Falta'));
+  const cls = situacao==='Presente' ? 'ok' : (situacao==='Falta' ? 'crit' : 'warn');
   return `<tr data-diario="${entryId}" data-efrow="${r.funcionarioId}">
     <td>${escapeXml(nome)}</td>
     <td>${escapeXml(funcao)}</td>
     <td style="text-align:center;"><input type="checkbox" data-ef="manha" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.manha?'checked':''}></td>
     <td style="text-align:center;"><input type="checkbox" data-ef="tarde" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.tarde?'checked':''}></td>
-    <td style="text-align:center;"><span class="badge ${presente?'ok':'warn'}">${presente?'Presente':'Falta'}</span></td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="atestado" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.atestado?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="faltaJustificada" data-diario="${entryId}" data-efrow="${r.funcionarioId}" ${r.faltaJustificada?'checked':''}></td>
+    <td style="text-align:center;"><span class="badge ${cls}">${situacao}</span></td>
   </tr>`;
 }
 function efetivoResumoHtml(e){
-  const presentes = (e.efetivo||[]).filter(r=>r.manha||r.tarde);
+  const linhas = e.efetivo||[];
   const porFuncao = {};
-  presentes.forEach(r=>{
+  linhas.forEach(r=>{
     const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(r.funcionarioId));
     const funcao = f ? f.funcao : '(sem função)';
-    porFuncao[funcao] = (porFuncao[funcao]||0)+1;
+    if(!porFuncao[funcao]) porFuncao[funcao] = {presentes:0, faltas:0, atestados:0};
+    if(r.atestado) porFuncao[funcao].atestados++;
+    else if(r.faltaJustificada) { /* não conta como falta simples nem presença */ }
+    else if(r.manha||r.tarde) porFuncao[funcao].presentes++;
+    else porFuncao[funcao].faltas++;
   });
-  const linhas = Object.entries(porFuncao).sort((a,b)=>b[1]-a[1]);
-  return `<table class="resumo-tbl" style="margin-top:10px;max-width:340px;"><tbody>
-    ${linhas.length ? linhas.map(([f,q])=>`<tr><td>${escapeXml(f)}</td><td class="num">${q}</td></tr>`).join('') : `<tr><td style="color:var(--text-faint);">Nenhum funcionário presente ainda</td></tr>`}
-    <tr style="font-weight:600;"><td>TOTAL</td><td class="num">${presentes.length}</td></tr>
+  const entradas = Object.entries(porFuncao).sort((a,b)=>b[1].presentes-a[1].presentes);
+  const totais = linhas.reduce((acc,r)=>{
+    if(r.atestado) acc.atestados++;
+    else if(r.faltaJustificada) acc.justificadas++;
+    else if(r.manha||r.tarde) acc.presentes++;
+    else acc.faltas++;
+    return acc;
+  }, {presentes:0, faltas:0, atestados:0, justificadas:0});
+  return `<table class="resumo-tbl" style="width:100%;"><thead><tr>
+      <th style="text-align:left;color:var(--text-faint);font-weight:500;font-size:10.5px;padding-bottom:6px;">Função</th>
+      <th class="num" style="color:var(--text-faint);font-weight:500;font-size:10.5px;padding-bottom:6px;">Presentes</th>
+      <th class="num" style="color:var(--text-faint);font-weight:500;font-size:10.5px;padding-bottom:6px;">Faltas</th>
+      <th class="num" style="color:var(--text-faint);font-weight:500;font-size:10.5px;padding-bottom:6px;">Atestados</th>
+    </tr></thead><tbody>
+    ${entradas.length ? entradas.map(([f,v])=>`<tr><td>${escapeXml(f)}</td><td class="num">${v.presentes}</td><td class="num">${v.faltas}</td><td class="num">${v.atestados}</td></tr>`).join('') : `<tr><td colspan="4" style="color:var(--text-faint);">Nenhum funcionário nesta obra ainda</td></tr>`}
+    <tr style="font-weight:600;"><td>TOTAL</td><td class="num">${totais.presentes}</td><td class="num">${totais.faltas}</td><td class="num">${totais.atestados}</td></tr>
   </tbody></table>`;
 }
 function syncEfetivoDoDia(entry){
@@ -2672,7 +2732,7 @@ function syncEfetivoDoDia(entry){
   const ativos = sistemaGlobal.funcionarios.filter(f=>String(f.obraId)===String(currentProjectId));
   ativos.forEach(f=>{
     if(!entry.efetivo.some(r=>String(r.funcionarioId)===String(f.id))){
-      entry.efetivo.push({funcionarioId:f.id, manha:false, tarde:false});
+      entry.efetivo.push({funcionarioId:f.id, manha:false, tarde:false, atestado:false, faltaJustificada:false});
     }
   });
 }
@@ -2686,12 +2746,35 @@ function entregasPrevistasHtml(){
     </table></div>
   </div>`;
 }
-function statusAtividadesRowHtml(entryId, subitem, status){
-  return `<tr><td>${escapeXml((subitem.numero||'')+' '+(subitem.nome||''))}</td><td><select class="cell" data-statusact="${subitem.id}" data-diario="${entryId}">
-    <option value="" ${!status?'selected':''}>—</option>
-    <option value="Em andamento" ${status==='Em andamento'?'selected':''}>Em andamento</option>
-    <option value="Concluída" ${status==='Concluída'?'selected':''}>Concluída</option>
-  </select></td></tr>`;
+function subitemLatestStatus(subitemId){
+  let status = null;
+  const sorted = [...diarioObra].sort((a,b)=>(a.data||'').localeCompare(b.data||'') || (a.numero-b.numero));
+  sorted.forEach(e=>{
+    const item = (e.atividadesEap||[]).find(a=>String(a.subitemId)===String(subitemId));
+    if(item) status = item.status;
+  });
+  return status;
+}
+function atividadeEapRowHtml(entryId, a){
+  const s = orcamento.find(r=>String(r.id)===String(a.subitemId));
+  const nome = s ? `${s.numero} ${s.nome}` : '(subitem removido)';
+  return `<tr><td>${escapeXml(nome)}</td><td><select class="cell" data-eapstatus="${a.subitemId}" data-diario="${entryId}">
+    <option value="Em andamento" ${a.status==='Em andamento'?'selected':''}>Em andamento</option>
+    <option value="Concluída" ${a.status==='Concluída'?'selected':''}>Concluída</option>
+  </select></td><td><button class="icon-btn" data-eapremove="${a.subitemId}" data-diario="${entryId}" title="Remover">✕</button></td></tr>`;
+}
+function migrateDiarioEntry(e){
+  if(e.atividadesTexto===undefined){
+    e.atividadesTexto = (typeof e.atividades==='string') ? e.atividades : '';
+  }
+  if(!Array.isArray(e.atividadesEap)){
+    e.atividadesEap = [];
+    if(e.statusAtividades && typeof e.statusAtividades==='object'){
+      Object.entries(e.statusAtividades).forEach(([subitemId,status])=>{
+        if(status) e.atividadesEap.push({subitemId, status});
+      });
+    }
+  }
 }
 function materialRowHtml(entryId, listName, r){
   return `<tr data-diario="${entryId}" data-matrow="${r.id}">
@@ -2704,6 +2787,8 @@ function materialRowHtml(entryId, listName, r){
 }
 function diarioEntryHtml(e, isOpen){
   const totalEfetivo = (e.efetivo||[]).filter(r=>r.manha||r.tarde).length;
+  const jaAdicionados = new Set((e.atividadesEap||[]).map(a=>String(a.subitemId)));
+  const naoConcluidas = orcamento.filter(r=>r.level==='subitem' && !jaAdicionados.has(String(r.id)) && subitemLatestStatus(r.id)!=='Concluída');
   return `<details class="qitem" data-diarioentry="${e.id}" ${isOpen?'open':''}>
     <summary class="qitem-summary"><span class="chev">▸</span> Diário nº ${e.numero} — ${e.data?fmtDate(e.data):'(sem data)'} <span class="qitem-meta">${totalEfetivo} funcionário(s) em campo</span>
       <button class="icon-btn" data-diarioremove="${e.id}" title="Remover registro" style="margin-left:8px;">✕</button>
@@ -2723,21 +2808,33 @@ function diarioEntryHtml(e, isOpen){
       </div>
       <div class="qsection">
         <h3><span class="tag">efetivo</span>Efetivo do dia (presença)</h3>
-        <p class="desc">Lista automática com os funcionários ativos nesta obra (cadastrados em "Funcionários"). Marque manhã e/ou tarde para registrar presença — se nenhum for marcado, conta como falta.</p>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Nome</th><th style="width:170px;">Função</th><th style="width:70px;text-align:center;">Manhã</th><th style="width:70px;text-align:center;">Tarde</th><th style="width:100px;text-align:center;">Situação</th></tr></thead>
-          <tbody>${(e.efetivo||[]).map(r=>efetivoRowHtml(e.id,r)).join('')}</tbody>
-        </table></div>
+        <p class="desc">Lista automática com os funcionários ativos nesta obra (cadastrados em "Funcionários"). Marque manhã e/ou tarde para presença; ou Atestado / Falta justificada quando for o caso.</p>
+        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+          <div class="tbl-wrap" style="flex:2;min-width:340px;"><table class="qtbl zebra"><thead><tr><th>Nome</th><th style="width:140px;">Função</th><th style="width:60px;text-align:center;">Manhã</th><th style="width:60px;text-align:center;">Tarde</th><th style="width:70px;text-align:center;">Atestado</th><th style="width:90px;text-align:center;">Falta just.</th><th style="width:110px;text-align:center;">Situação</th></tr></thead>
+            <tbody>${(e.efetivo||[]).map(r=>efetivoRowHtml(e.id,r)).join('')}</tbody>
+          </table></div>
+          <div style="flex:1;min-width:260px;">
+            <h4 style="font-family:var(--disp);font-size:11.5px;margin:0 0 6px;color:var(--text-dim);">Resumo do efetivo</h4>
+            ${efetivoResumoHtml(e)}
+          </div>
+        </div>
         ${!(e.efetivo||[]).length ? '<p class="hint" style="margin-top:8px;">Nenhum funcionário cadastrado para esta obra ainda — cadastre em "Funcionários".</p>' : ''}
-        <h4 style="font-family:var(--disp);font-size:11.5px;margin:14px 0 6px;color:var(--text-dim);">Resumo por função</h4>
-        ${efetivoResumoHtml(e)}
       </div>
       <div class="qsection">
-        <h3><span class="tag">atividades</span>Atividades realizadas</h3>
-        <textarea class="cell" style="width:100%;min-height:80px;font-family:var(--sans);" data-df="atividades" data-diario="${e.id}" placeholder="Descreva as atividades executadas no dia...">${escapeXml(e.atividades)}</textarea>
-        <h4 style="font-family:var(--disp);font-size:11.5px;margin:14px 0 6px;color:var(--text-dim);">Status dos subitens do orçamento (fim do dia)</h4>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Subitem</th><th style="width:170px;">Status</th></tr></thead>
-          <tbody>${orcamento.filter(r=>r.level==='subitem').map(s=>statusAtividadesRowHtml(e.id, s, (e.statusAtividades||{})[s.id])).join('') || '<tr><td colspan="2" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhum subitem no orçamento ainda.</td></tr>'}</tbody>
+        <div class="toolbar-row">
+          <h3><span class="tag">atividades</span>Atividades realizadas</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn small" data-diariocopyontem="${e.id}">Copiar atividades do dia anterior</button>
+            <select class="cell" style="width:240px;" data-diarioaddatividade="${e.id}">
+              <option value="">+ Adicionar atividade da EAP…</option>
+              ${naoConcluidas.map(s=>`<option value="${s.id}">${escapeXml(s.numero+' '+truncate(s.nome,40))}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Subitem</th><th style="width:170px;">Status</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.atividadesEap||[]).map(a=>atividadeEapRowHtml(e.id,a)).join('') || '<tr><td colspan="3" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhuma atividade adicionada ainda.</td></tr>'}</tbody>
         </table></div>
+        <textarea class="cell" style="width:100%;min-height:70px;font-family:var(--sans);margin-top:12px;" data-df="atividadesTexto" data-diario="${e.id}" placeholder="Observações gerais sobre as atividades do dia...">${escapeXml(e.atividadesTexto)}</textarea>
       </div>
       <div class="qsection">
         <div class="toolbar-row"><h3><span class="tag">materiais</span>Entrada de materiais</h3><button class="btn small primary" data-diarioaddentrada="${e.id}">+ Adicionar</button></div>
@@ -2763,8 +2860,7 @@ function bindDiarioEvents(){
   const wrap = document.getElementById('diarioEntriesWrap');
   if(!wrap) return;
   wrap.querySelectorAll('[data-df]').forEach(el=>{
-    const evName = el.tagName==='SELECT' ? 'change' : 'change';
-    el.addEventListener(evName, ()=>{
+    el.addEventListener('change', ()=>{
       const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
       if(!entry) return;
       entry[el.dataset.df] = el.value;
@@ -2786,16 +2882,57 @@ function bindDiarioEvents(){
       const row = (entry.efetivo||[]).find(r=>String(r.funcionarioId)===el.dataset.efrow);
       if(!row) return;
       row[el.dataset.ef] = el.checked;
+      // exclusividade: atestado/falta justificada desmarcam manhã/tarde e vice-versa fazem sentido manter independentes,
+      // mas evitamos marcar atestado E falta justificada ao mesmo tempo
+      if(el.dataset.ef==='atestado' && el.checked) row.faltaJustificada = false;
+      if(el.dataset.ef==='faltaJustificada' && el.checked) row.atestado = false;
       renderDiario(); saveProject();
     });
   });
-  wrap.querySelectorAll('[data-statusact]').forEach(el=>{
+  wrap.querySelectorAll('[data-diarioaddatividade]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      if(!el.value) return;
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diarioaddatividade);
+      if(!entry) return;
+      entry.atividadesEap = entry.atividadesEap || [];
+      entry.atividadesEap.push({subitemId: el.value, status:'Em andamento'});
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-eapstatus]').forEach(el=>{
     el.addEventListener('change', ()=>{
       const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
       if(!entry) return;
-      entry.statusAtividades = entry.statusAtividades || {};
-      entry.statusAtividades[el.dataset.statusact] = el.value;
-      saveProject();
+      const item = (entry.atividadesEap||[]).find(a=>String(a.subitemId)===el.dataset.eapstatus);
+      if(item) item.status = el.value;
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-eapremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diario);
+      if(!entry) return;
+      entry.atividadesEap = (entry.atividadesEap||[]).filter(a=>String(a.subitemId)!==btn.dataset.eapremove);
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-diariocopyontem]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diariocopyontem);
+      if(!entry) return;
+      const candidatos = diarioObra.filter(x=>x.id!==entry.id && (x.data||'') < (entry.data||''));
+      if(!candidatos.length){ showToast('Não há registro de dia anterior para copiar.'); return; }
+      candidatos.sort((a,b)=>(a.data||'').localeCompare(b.data||'') || (a.numero-b.numero));
+      const ontem = candidatos[candidatos.length-1];
+      entry.atividadesEap = entry.atividadesEap || [];
+      const existentes = new Set(entry.atividadesEap.map(a=>String(a.subitemId)));
+      (ontem.atividadesEap||[]).forEach(a=>{
+        if(!existentes.has(String(a.subitemId))){
+          entry.atividadesEap.push({subitemId:a.subitemId, status:'Em andamento'});
+          existentes.add(String(a.subitemId));
+        }
+      });
+      renderDiario(); saveProject();
     });
   });
   wrap.querySelectorAll('[data-diarioentregarecebida]').forEach(el=>{
@@ -2847,23 +2984,43 @@ function bindDiarioEvents(){
     });
   });
 }
+function diarioSearchableText(e){
+  const nomeFunc = id => (sistemaGlobal.funcionarios.find(x=>String(x.id)===String(id))||{}).nome || '';
+  const atividadesTxt = (e.atividadesEap||[]).map(a=>{
+    const s = orcamento.find(r=>String(r.id)===String(a.subitemId));
+    return (s ? (s.numero+' '+s.nome) : '')+' '+a.status;
+  }).join(' ');
+  return [
+    e.data, e.responsavel, e.climaManha, e.climaTarde, e.climaNoite, e.atividadesTexto, e.ocorrencias, atividadesTxt,
+    ...(e.efetivo||[]).map(r=>nomeFunc(r.funcionarioId)),
+    ...(e.entradaMateriais||[]).map(r=>(r.item||'')+' '+(r.obs||'')),
+    ...(e.saidaMateriais||[]).map(r=>(r.item||'')+' '+(r.obs||'')),
+  ].join(' ').toLowerCase();
+}
+let diarioSearchQuery = '';
 function renderDiario(){
   const wrap = document.getElementById('diarioEntriesWrap');
   if(!wrap) return;
+  diarioObra.forEach(migrateDiarioEntry);
   diarioObra.forEach(syncEfetivoDoDia);
   const openIds = new Set();
   wrap.querySelectorAll('details.qitem[open]').forEach(d=>openIds.add(d.dataset.diarioentry));
+  const q = diarioSearchQuery.trim().toLowerCase();
+  let visiveis = diarioObra;
+  if(q) visiveis = diarioObra.filter(e=>diarioSearchableText(e).includes(q));
   const emptyEl = document.getElementById('emptyDiario');
   if(emptyEl) emptyEl.style.display = diarioObra.length ? 'none':'block';
-  const sorted = [...diarioObra].sort((a,b)=>(b.data||'').localeCompare(a.data||'') || (b.numero-a.numero));
-  wrap.innerHTML = sorted.map((e,i)=>diarioEntryHtml(e, openIds.size ? openIds.has(String(e.id)) : i===0)).join('');
+  const noResultsEl = document.getElementById('diarioNoResults');
+  if(noResultsEl) noResultsEl.style.display = (q && visiveis.length===0) ? 'block' : 'none';
+  const sorted = [...visiveis].sort((a,b)=>(b.data||'').localeCompare(a.data||'') || (b.numero-a.numero));
+  wrap.innerHTML = sorted.map((e,i)=>diarioEntryHtml(e, q ? true : (openIds.size ? openIds.has(String(e.id)) : i===0))).join('');
   bindDiarioEvents();
 }
 function addDiarioEntry(){
   const entry = {
     id: nextDiarioId++, numero: diarioObra.length+1, data: toISO(new Date()),
     climaManha:'Bom', climaTarde:'Bom', climaNoite:'Bom', responsavel:'',
-    efetivo:[], atividades:'', entradaMateriais:[], saidaMateriais:[], ocorrencias:'', statusAtividades:{},
+    efetivo:[], atividadesTexto:'', atividadesEap:[], entradaMateriais:[], saidaMateriais:[], ocorrencias:'',
   };
   syncEfetivoDoDia(entry);
   diarioObra.push(entry);
@@ -2871,6 +3028,13 @@ function addDiarioEntry(){
 }
 function setupDiarioTab(){
   document.getElementById('btnAddDiario').addEventListener('click', addDiarioEntry);
+  const searchInput = document.getElementById('diarioSearchInput');
+  if(searchInput){
+    searchInput.addEventListener('input', ()=>{
+      diarioSearchQuery = searchInput.value;
+      renderDiario();
+    });
+  }
 }
 
 /* ============================================================
@@ -3071,6 +3235,12 @@ function setupEscritorioTab(){
 }
 
 /* --- Patrimônio --- */
+function localizacaoOptionsHtml(selected){
+  let extra = '';
+  const opts = ['Escritório', ...obrasCache.map(o=>o.nome||'(sem nome)')];
+  if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
+  return `<option value="">—</option>` + opts.map(o=>`<option ${o===selected?'selected':''}>${escapeXml(o)}</option>`).join('') + extra;
+}
 function patrimonioRowHtml(p){
   return `<tr data-patr="${p.id}">
     <td><input type="text" class="cell" data-pf="nome" data-patr="${p.id}" value="${escapeAttr(p.nome)}"></td>
@@ -3080,7 +3250,7 @@ function patrimonioRowHtml(p){
     <td><input type="text" class="cell" data-pf="fornecedor" data-patr="${p.id}" value="${escapeAttr(p.fornecedor)}"></td>
     <td><input type="text" class="cell" data-pf="numeroSerie" data-patr="${p.id}" value="${escapeAttr(p.numeroSerie)}"></td>
     <td><select class="cell" data-pf="status" data-patr="${p.id}">${PATRIMONIO_STATUS.map(s=>`<option ${s===p.status?'selected':''}>${s}</option>`).join('')}</select></td>
-    <td><input type="text" class="cell" data-pf="localizacao" data-patr="${p.id}" value="${escapeAttr(p.localizacao)}"></td>
+    <td><select class="cell" data-pf="localizacao" data-patr="${p.id}">${localizacaoOptionsHtml(p.localizacao)}</select></td>
     <td><input type="text" class="cell" data-pf="observacoes" data-patr="${p.id}" value="${escapeAttr(p.observacoes)}"></td>
     <td><button class="icon-btn" data-patrremove="${p.id}" title="Remover">✕</button></td>
   </tr>`;
@@ -3228,8 +3398,18 @@ function funcaoOperarioOptionsHtml(selected){
   if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
   return opts.map(f=>`<option ${f===selected?'selected':''}>${escapeXml(f)}</option>`).join('') + extra + `<option value="__add_funcao_op__">+ Adicionar novo</option>`;
 }
-function obraOptionsHtml(selected){
-  return `<option value="">—</option>` + obrasCache.map(o=>`<option value="${o.id}" ${o.id===selected?'selected':''}>${escapeXml(o.nome||'(sem nome)')}</option>`).join('');
+const FUNCIONARIO_STATUS_ESPECIAIS = ['INSS','Afastado','Desligado','Inativo'];
+function obraStatusOptionsHtml(selected){
+  let opts = `<option value="">—</option>`;
+  opts += obrasCache.map(o=>`<option value="${o.id}" ${o.id===selected?'selected':''}>${escapeXml(o.nome||'(sem nome)')}</option>`).join('');
+  opts += FUNCIONARIO_STATUS_ESPECIAIS.map(s=>`<option value="${s}" ${s===selected?'selected':''}>${s}</option>`).join('');
+  return opts;
+}
+function obraStatusLabel(obraId){
+  if(!obraId) return '—';
+  if(FUNCIONARIO_STATUS_ESPECIAIS.includes(obraId)) return obraId;
+  const o = obrasCache.find(x=>x.id===obraId);
+  return o ? (o.nome||'(sem nome)') : obraId;
 }
 function salarioFuncaoRowHtml(funcao){
   const val = sistemaGlobal.salariosPorFuncao[funcao];
@@ -3250,27 +3430,53 @@ function renderSalariosFuncao(){
     });
   });
 }
+function computeEfetivoPorObraFuncao(){
+  const grid = {};
+  sistemaGlobal.funcionarios.forEach(f=>{
+    if(!f.obraId || FUNCIONARIO_STATUS_ESPECIAIS.includes(f.obraId)) return;
+    if(!obrasCache.some(o=>o.id===f.obraId)) return;
+    if(!grid[f.funcao]) grid[f.funcao] = {};
+    grid[f.funcao][f.obraId] = (grid[f.funcao][f.obraId]||0)+1;
+  });
+  return grid;
+}
+function renderEfetivoPorObra(){
+  const thead = document.getElementById('theadEfetivoObra');
+  const tbody = document.getElementById('tbodyEfetivoObra');
+  if(!thead || !tbody) return;
+  const grid = computeEfetivoPorObraFuncao();
+  const funcoesComDados = Object.keys(grid).sort();
+  thead.innerHTML = `<th style="min-width:140px;">Função</th>` + obrasCache.map(o=>`<th class="num" style="width:80px;" title="${escapeAttr(o.nome||'')}">${escapeXml(truncate(o.nome||'(sem nome)',12))}</th>`).join('') + `<th class="num" style="width:60px;">Total</th>`;
+  if(!funcoesComDados.length || !obrasCache.length){
+    tbody.innerHTML = `<tr><td colspan="${obrasCache.length+2}" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhum funcionário alocado em obra ainda.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = funcoesComDados.map(func=>{
+    const row = grid[func];
+    let total=0;
+    const cells = obrasCache.map(o=>{ const v=row[o.id]||0; total+=v; return `<td class="num">${v||'—'}</td>`; }).join('');
+    return `<tr><td>${escapeXml(func)}</td>${cells}<td class="num" style="font-weight:600;">${total}</td></tr>`;
+  }).join('');
+}
 function funcionarioRowHtml(f){
-  const salario = sistemaGlobal.salariosPorFuncao[f.funcao];
   return `<tr data-func="${f.id}">
-    <td><input type="text" class="cell" data-ff="nome" data-func="${f.id}" value="${escapeAttr(f.nome)}"></td>
-    <td><input type="text" class="cell" data-ff="endereco" data-func="${f.id}" value="${escapeAttr(f.endereco)}"></td>
-    <td><input type="text" class="cell" data-ff="cpf" data-func="${f.id}" value="${escapeAttr(f.cpf)}"></td>
-    <td><input type="text" class="cell" data-ff="rg" data-func="${f.id}" value="${escapeAttr(f.rg)}"></td>
-    <td><input type="text" class="cell" data-ff="ctps" data-func="${f.id}" value="${escapeAttr(f.ctps)}"></td>
+    <td><button data-funcopen="${f.id}" style="background:none;border:none;color:var(--accent);cursor:pointer;text-decoration:underline;padding:0;font:inherit;text-align:left;">${escapeXml(f.nome)}</button></td>
     <td><select class="cell" data-ff="funcao" data-func="${f.id}">${funcaoOperarioOptionsHtml(f.funcao)}</select></td>
-    <td class="num" style="font-family:var(--mono);color:var(--accent)">${salario?('R$ '+fmtNum(salario,2)):'<span class="hint">definir na tabela</span>'}</td>
-    <td><select class="cell" data-ff="obraId" data-func="${f.id}">${obraOptionsHtml(f.obraId)}</select></td>
+    <td><select class="cell" data-ff="obraId" data-func="${f.id}">${obraStatusOptionsHtml(f.obraId)}</select></td>
     <td><button class="icon-btn" data-funcremove="${f.id}" title="Remover">✕</button></td>
   </tr>`;
 }
 function renderFuncionarios(){
   renderSalariosFuncao();
+  renderEfetivoPorObra();
   const tbody = document.getElementById('tbodyFuncionarios');
   if(!tbody) return;
   const emptyEl = document.getElementById('emptyFuncionarios');
   if(emptyEl) emptyEl.style.display = sistemaGlobal.funcionarios.length ? 'none':'block';
   tbody.innerHTML = sistemaGlobal.funcionarios.map(funcionarioRowHtml).join('');
+  tbody.querySelectorAll('[data-funcopen]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openFuncionarioModal(btn.dataset.funcopen));
+  });
   tbody.querySelectorAll('[data-ff]').forEach(el=>{
     el.addEventListener('change', ()=>{
       const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===el.dataset.func);
@@ -3300,8 +3506,153 @@ function renderFuncionarios(){
 function addFuncionario(){
   const nome = (prompt('Nome do funcionário:')||'').trim();
   if(!nome) return;
-  sistemaGlobal.funcionarios.push({id: nextFuncionarioId++, nome, endereco:'', cpf:'', rg:'', ctps:'', funcao: FUNCOES_OPERARIO_BASE[0], obraId: currentProjectId||''});
+  sistemaGlobal.funcionarios.push({
+    id: nextFuncionarioId++, nome, endereco:'', cpf:'', rg:'', ctps:'', cep:'', bairro:'',
+    email:'', pix:'', contaBancaria:'', agencia:'', operacao:'',
+    funcao: FUNCOES_OPERARIO_BASE[0], obraId: currentProjectId||'',
+    faltasAtestados:[], observacoesHist:[], pagamentos:[],
+  });
   renderFuncionarios(); saveSistemaGlobal();
+}
+function novoRegistroId(){ return Date.now()+Math.floor(Math.random()*1000); }
+function funcionarioModalHtml(f){
+  const salario = sistemaGlobal.salariosPorFuncao[f.funcao];
+  f.faltasAtestados = f.faltasAtestados || [];
+  f.observacoesHist = f.observacoesHist || [];
+  f.pagamentos = f.pagamentos || [];
+  return `
+    <h3>${escapeXml(f.nome)}</h3>
+    <div class="qsection" style="padding-top:0;">
+      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Dados pessoais</h4>
+      <div class="config-grid">
+        <div class="field-row"><label>Nome</label><input type="text" class="cell" data-fm="nome" value="${escapeAttr(f.nome)}"></div>
+        <div class="field-row"><label>CPF</label><input type="text" class="cell" data-fm="cpf" value="${escapeAttr(f.cpf)}"></div>
+        <div class="field-row"><label>RG</label><input type="text" class="cell" data-fm="rg" value="${escapeAttr(f.rg)}"></div>
+        <div class="field-row"><label>CTPS</label><input type="text" class="cell" data-fm="ctps" value="${escapeAttr(f.ctps)}"></div>
+        <div class="field-row"><label>Endereço</label><input type="text" class="cell" data-fm="endereco" value="${escapeAttr(f.endereco)}"></div>
+        <div class="field-row"><label>CEP</label><input type="text" class="cell" data-fm="cep" value="${escapeAttr(f.cep)}"></div>
+        <div class="field-row"><label>Bairro</label><input type="text" class="cell" data-fm="bairro" value="${escapeAttr(f.bairro)}"></div>
+      </div>
+    </div>
+    <div class="qsection">
+      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Contato</h4>
+      <div class="config-grid">
+        <div class="field-row"><label>E-mail</label><input type="email" class="cell" data-fm="email" value="${escapeAttr(f.email)}"></div>
+        <div class="field-row"><label>PIX</label><input type="text" class="cell" data-fm="pix" value="${escapeAttr(f.pix)}"></div>
+      </div>
+    </div>
+    <div class="qsection">
+      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Dados bancários</h4>
+      <div class="config-grid">
+        <div class="field-row"><label>Conta</label><input type="text" class="cell" data-fm="contaBancaria" value="${escapeAttr(f.contaBancaria)}"></div>
+        <div class="field-row"><label>Agência</label><input type="text" class="cell" data-fm="agencia" value="${escapeAttr(f.agencia)}"></div>
+        <div class="field-row"><label>Operação (OP)</label><input type="text" class="cell" data-fm="operacao" value="${escapeAttr(f.operacao)}"></div>
+      </div>
+    </div>
+    <div class="qsection">
+      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Trabalho</h4>
+      <div class="config-grid">
+        <div class="field-row"><label>Função</label><select class="cell" data-fm="funcao">${funcaoOperarioOptionsHtml(f.funcao)}</select></div>
+        <div class="field-row"><label>Obra/Status</label><select class="cell" data-fm="obraId">${obraStatusOptionsHtml(f.obraId)}</select></div>
+      </div>
+      <p class="hint" style="margin-top:6px;">Salário da função "${escapeXml(f.funcao)}": ${salario?('R$ '+fmtNum(salario,2)):'não definido na tabela de Salários'}</p>
+    </div>
+    <div class="qsection">
+      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Faltas, atestados e faltas justificadas</h4><button class="btn small" id="fmAddFalta">+ Registrar</button></div>
+      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:150px;">Tipo</th><th>Observação</th><th style="width:30px;"></th></tr></thead>
+        <tbody>${f.faltasAtestados.map(r=>`<tr><td>${fmtDate(r.data)}</td><td>${escapeXml(r.tipo)}</td><td>${escapeXml(r.obs||'')}</td><td><button class="icon-btn" data-fmremovefalta="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum registro</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="qsection">
+      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Observações</h4><button class="btn small" id="fmAddObs">+ Adicionar</button></div>
+      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:150px;">Obra</th><th>Descrição</th><th style="width:30px;"></th></tr></thead>
+        <tbody>${f.observacoesHist.map(r=>`<tr><td>${fmtDate(r.data)}</td><td>${escapeXml(r.obra||'')}</td><td>${escapeXml(r.descricao||'')}</td><td><button class="icon-btn" data-fmremoveobs="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhuma observação</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="qsection">
+      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Histórico de pagamentos</h4><button class="btn small" id="fmAddPag">+ Registrar pagamento</button></div>
+      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:110px;" class="num">Valor (R$)</th><th>Observação</th><th style="width:30px;"></th></tr></thead>
+        <tbody>${f.pagamentos.map(r=>`<tr><td>${fmtDate(r.data)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.valor,2)}</td><td>${escapeXml(r.obs||'')}</td><td><button class="icon-btn" data-fmremovepag="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum pagamento</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="fmCloseBtn">Fechar</button></div>
+  `;
+}
+function openFuncionarioModal(funcId){
+  const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(funcId));
+  if(!f) return;
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  box.style.maxWidth = '760px';
+  box.innerHTML = funcionarioModalHtml(f);
+  overlay.style.display = 'flex';
+  function close(){ overlay.style.display='none'; box.style.maxWidth=''; renderFuncionarios(); }
+  document.getElementById('fmCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
+  box.querySelectorAll('[data-fm]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const fld = el.dataset.fm;
+      if(fld==='funcao' && el.value==='__add_funcao_op__'){
+        const novo = (prompt('Nome da nova função:')||'').trim();
+        if(novo){
+          sistemaGlobal.funcoesOperarioCustom = sistemaGlobal.funcoesOperarioCustom || [];
+          if(!allFuncoesOperario().includes(novo)) sistemaGlobal.funcoesOperarioCustom.push(novo);
+          f.funcao = novo;
+        }
+      } else {
+        f[fld] = el.value;
+      }
+      saveSistemaGlobal();
+      openFuncionarioModal(f.id);
+    });
+  });
+  document.getElementById('fmAddFalta').addEventListener('click', ()=>{
+    const tipo = (prompt('Tipo (Falta / Atestado / Falta justificada):','Falta')||'').trim();
+    if(!tipo) return;
+    const data = prompt('Data (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
+    const obs = prompt('Observação (opcional):','') || '';
+    f.faltasAtestados.push({id:novoRegistroId(), tipo, data, obs});
+    saveSistemaGlobal();
+    openFuncionarioModal(f.id);
+  });
+  box.querySelectorAll('[data-fmremovefalta]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      f.faltasAtestados = f.faltasAtestados.filter(r=>String(r.id)!==btn.dataset.fmremovefalta);
+      saveSistemaGlobal();
+      openFuncionarioModal(f.id);
+    });
+  });
+  document.getElementById('fmAddObs').addEventListener('click', ()=>{
+    const data = prompt('Data (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
+    const obra = prompt('Obra relacionada:','') || '';
+    const descricao = prompt('Descrição:','') || '';
+    f.observacoesHist.push({id:novoRegistroId(), data, obra, descricao});
+    saveSistemaGlobal();
+    openFuncionarioModal(f.id);
+  });
+  box.querySelectorAll('[data-fmremoveobs]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      f.observacoesHist = f.observacoesHist.filter(r=>String(r.id)!==btn.dataset.fmremoveobs);
+      saveSistemaGlobal();
+      openFuncionarioModal(f.id);
+    });
+  });
+  document.getElementById('fmAddPag').addEventListener('click', ()=>{
+    const data = prompt('Data do pagamento (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
+    const valorStr = prompt('Valor (R$):','0');
+    const valor = parseFloat((valorStr||'0').replace(',','.'))||0;
+    const obs = prompt('Observação (opcional):','') || '';
+    f.pagamentos.push({id:novoRegistroId(), data, valor, obs});
+    saveSistemaGlobal();
+    openFuncionarioModal(f.id);
+  });
+  box.querySelectorAll('[data-fmremovepag]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      f.pagamentos = f.pagamentos.filter(r=>String(r.id)!==btn.dataset.fmremovepag);
+      saveSistemaGlobal();
+      openFuncionarioModal(f.id);
+    });
+  });
 }
 async function setupFuncionariosTab(){
   document.getElementById('btnAddFuncionario').addEventListener('click', addFuncionario);
@@ -3346,7 +3697,10 @@ async function refreshConsolidacao(){
   try{
     const rows = await supaListProjectsFull();
     consolidacaoObras = (rows||[]).map(computeObraKpis);
+    await refreshObrasCache();
     renderConsolidacao();
+    try{ renderFuncionarios(); }catch(e){}
+    try{ renderPatrimonio(); }catch(e){}
     showToast('Dados de todas as obras atualizados.');
   }catch(e){
     console.error(e);
@@ -3390,7 +3744,27 @@ function renderConsolidacao(){
   }
   renderConsolidacaoChart();
   renderExpectativaSaldoChart();
+  renderComprasConsolidadas();
   if(extratoLinhas.length) renderConciliacao();
+}
+function renderComprasConsolidadas(){
+  const tbody = document.getElementById('tbodyComprasConsolidadas');
+  const emptyEl = document.getElementById('emptyComprasConsolidadas');
+  if(!tbody) return;
+  const linhas = [];
+  consolidacaoObras.forEach(o=>{
+    (o.compras||[]).forEach(c=>{
+      linhas.push({data:c.data||'', loja:c.loja||c.descricao||'(sem loja)', valor:c.valorTotal||0, obra:o.nome});
+    });
+  });
+  linhas.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  if(emptyEl) emptyEl.style.display = linhas.length ? 'none':'block';
+  tbody.innerHTML = linhas.map(l=>`<tr>
+    <td>${l.data?fmtDate(l.data):'—'}</td>
+    <td>${escapeXml(l.loja)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(l.valor,2)}</td>
+    <td>${escapeXml(l.obra)}</td>
+  </tr>`).join('');
 }
 function renderConsolidacaoChart(){
   const canvas = document.getElementById('chartConsolidacaoObras');
@@ -3536,7 +3910,7 @@ async function supaUpsertSistemaGlobal(row){
 }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), estoqueTransferenciasRecebidas: estoqueTransferenciasRecebidas.map(t=>({...t})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -3550,7 +3924,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, estoqueTransferenciasRecebidas: payload.estoqueTransferenciasRecebidas, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -3570,6 +3944,7 @@ function applyProjectPayload(payload){
   antecipacao = payload.antecipacao || {};
   estoqueConsumos = payload.estoqueConsumos || [];
   nextEstoqueConsumoId = estoqueConsumos.reduce((m,u)=>Math.max(m,u.id||0), 0) + 1;
+  estoqueTransferenciasRecebidas = payload.estoqueTransferenciasRecebidas || [];
   composicoesProprias = payload.composicoesProprias || [];
   nextComposicaoId = composicoesProprias.reduce((m,c)=>Math.max(m,c.id||0), 0) + 1;
   compEditingId = null;
@@ -3604,7 +3979,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -3615,7 +3990,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -3635,7 +4010,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -3645,7 +4020,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
   try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
@@ -3675,7 +4050,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }

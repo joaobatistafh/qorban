@@ -85,6 +85,93 @@ function escapeAttr(s){ return String(s??'').replace(/"/g,'&quot;'); }
 function round2(n){ return Math.round(n*100)/100; }
 function fmtInput(n){ return (n===null||n===undefined||isNaN(n)) ? '' : round2(n); }
 
+/* ---------------- máscaras de campo (CPF/RG/CEP/celular) ---------------- */
+function maskDigits(s, len){ return String(s||'').replace(/\D/g,'').slice(0, len); }
+function maskCPF(v){
+  const d = maskDigits(v, 11);
+  return d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+}
+function maskRG(v){
+  const d = maskDigits(v, 9);
+  return d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,3})$/, '$1');
+}
+function maskCEP(v){
+  const d = maskDigits(v, 8);
+  return d.replace(/(\d{2})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,3})$/, '$1-$2');
+}
+function maskCelular(v){
+  const d = maskDigits(v, 11);
+  if(d.length<=2) return d.replace(/(\d{0,2})/, '($1');
+  if(d.length<=3) return d.replace(/(\d{2})(\d{0,1})/, '($1) $2');
+  if(d.length<=7) return d.replace(/(\d{2})(\d{1})(\d{0,4})/, '($1) $2 $3');
+  return d.replace(/(\d{2})(\d{1})(\d{4})(\d{0,4})/, '($1) $2 $3-$4');
+}
+const FIELD_MASKS = { cpf: maskCPF, rg: maskRG, cep: maskCEP, celular: maskCelular };
+function bindMaskedInput(el, maskFn){
+  el.addEventListener('input', ()=>{
+    const pos = el.selectionStart;
+    const before = el.value.length;
+    el.value = maskFn(el.value);
+    const after = el.value.length;
+    try{ el.setSelectionRange(pos + (after-before), pos + (after-before)); }catch(e){}
+  });
+}
+
+/* ---------------- previsão de compras parceladas nos meses seguintes ---------------- */
+function addMonthsClamped(dateISO, n){
+  const d = parseISO(dateISO);
+  const day = d.getDate();
+  const target = new Date(d.getFullYear(), d.getMonth()+n, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth()+1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  return toISO(target);
+}
+/* Recebe uma compra/custo (com data, valorTotal|valor, formaPagto, parcelas) e devolve
+   os eventos de caixa previstos: 1 evento por parcela, distribuídos nos meses seguintes. */
+function expandParcelasEventos(c){
+  const valor = (c.valorTotal!==undefined ? c.valorTotal : c.valor) || 0;
+  const parcelas = (c.formaPagto==='Cartão de crédito' && c.parcelas>1) ? c.parcelas : 1;
+  if(!c.data || parcelas<=1) return c.data ? [{data:c.data, valor}] : [];
+  const valorParcela = round2(valor/parcelas);
+  const eventos = [];
+  for(let i=0;i<parcelas;i++){
+    const v = (i===parcelas-1) ? round2(valor - valorParcela*(parcelas-1)) : valorParcela;
+    eventos.push({data: addMonthsClamped(c.data, i), valor: v, parcela: `${i+1}/${parcelas}`});
+  }
+  return eventos;
+}
+/* Resumo genérico "gastos por Tipo × Mês" (Mão de obra / Material / Equipamento / Extra),
+   reaproveitado em Escritório, Depósito, Fluxo de caixa e Financeiro.
+   items: array de {tipo, data, valorTotal|valor, formaPagto, parcelas} */
+function computeResumoGastosPorTipo(items){
+  const eventos = [];
+  (items||[]).forEach(c=>{
+    if(!c.data) return;
+    expandParcelasEventos(c).forEach(ev=>{ eventos.push({tipo: c.tipo||'Extra', mes: ev.data.slice(0,7), valor: ev.valor}); });
+  });
+  const meses = [...new Set(eventos.map(e=>e.mes))].sort();
+  const linhas = TIPOS_COMPRA.map(tipo=>{
+    const valoresPorMes = meses.map(m=> round2(eventos.filter(e=>e.tipo===tipo && e.mes===m).reduce((s,e)=>s+e.valor,0)));
+    return {tipo, valoresPorMes, totalLinha: round2(valoresPorMes.reduce((s,v)=>s+v,0))};
+  });
+  const totalGeralPorMes = meses.map((_,i)=> round2(linhas.reduce((s,l)=>s+l.valoresPorMes[i],0)));
+  const totalGeral = round2(totalGeralPorMes.reduce((s,v)=>s+v,0));
+  return {meses, linhas, totalGeralPorMes, totalGeral};
+}
+function renderResumoGastosTable(theadEl, tbodyEl, emptyEl, items){
+  if(!theadEl || !tbodyEl) return;
+  const r = computeResumoGastosPorTipo(items);
+  if(!r || !r.meses.length){
+    if(emptyEl) emptyEl.style.display='block';
+    theadEl.innerHTML=''; tbodyEl.innerHTML='';
+    return;
+  }
+  if(emptyEl) emptyEl.style.display='none';
+  theadEl.innerHTML = `<th style="min-width:150px;">Tipo</th>` + r.meses.map(m=>`<th class="num" style="width:100px;">${fmtMesLabel(m)}</th>`).join('') + `<th class="num" style="width:110px;">Total</th>`;
+  tbodyEl.innerHTML = r.linhas.map(l=>`<tr><td>${escapeXml(l.tipo)}</td>${l.valoresPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${Math.abs(v)>0.0001?fmtNum(v,2):'—'}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);font-weight:600;">${fmtNum(l.totalLinha,2)}</td></tr>`).join('')
+    + `<tr style="font-weight:600;background:var(--bg-inset);"><td>TOTAL</td>${r.totalGeralPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${fmtNum(v,2)}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);">${fmtNum(r.totalGeral,2)}</td></tr>`;
+}
+
 function showToast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg; t.classList.add('show');
@@ -2050,12 +2137,13 @@ function registrarUsoEstoque(key){
 async function transferirEstoque(key){
   if(!obrasCache.length) await refreshObrasCache();
   const outras = obrasCache.filter(o=>o.id!==currentProjectId);
-  if(!outras.length){ showToast('Não há outra obra ativa para transferir.'); return; }
-  const nomes = outras.map((o,i)=>`${i+1}. ${o.nome||'(sem nome)'}`).join('\n');
-  const escolha = prompt(`Transferir para qual obra? Digite o número:\n${nomes}`);
+  const opcoes = [{id:'__deposito__', nome:'Depósito'}, ...outras];
+  if(!opcoes.length){ showToast('Não há outra obra/depósito para transferir.'); return; }
+  const nomes = opcoes.map((o,i)=>`${i+1}. ${o.nome||'(sem nome)'}`).join('\n');
+  const escolha = prompt(`Transferir para onde? Digite o número:\n${nomes}`);
   const idx = parseInt(escolha,10)-1;
-  if(isNaN(idx) || !outras[idx]) return;
-  const destino = outras[idx];
+  if(isNaN(idx) || !opcoes[idx]) return;
+  const destino = opcoes[idx];
   const qtyStr = prompt('Quantidade a transferir:');
   if(qtyStr===null) return;
   const qty = parseFloat(qtyStr.replace(',','.'));
@@ -2066,6 +2154,13 @@ async function transferirEstoque(key){
   estoqueConsumos.push({id:nextEstoqueConsumoId++, materialKey:key, quantidade:qty, data:dataStr, motivo:`Transferência → ${destino.nome}`});
   renderEstoque();
   saveProject();
+  if(destino.id==='__deposito__'){
+    sistemaGlobal.deposito.estoqueTransferenciasRecebidas.push({id: Date.now(), nome:g.nome, unidade:g.unidade, tipo:g.tipo, quantidade:qty, data:dataStr, origemObraNome: (collectConfig().nome||'esta obra')});
+    renderDepositoEstoque();
+    saveSistemaGlobal();
+    showToast(`${fmtNum(qty,2)} ${g.unidade||''} de "${g.nome}" transferido(a) para o Depósito.`);
+    return;
+  }
   try{
     const rows = await supaRequest(`projetos?id=eq.${destino.id}&select=id,nome,dados`, {method:'GET'});
     const destDados = (rows && rows[0] && rows[0].dados) || {};
@@ -2219,7 +2314,7 @@ function computeFluxoCaixaSeries(periodType){
     if(date<buckets[key].sortDate) buckets[key].sortDate = date;
   }
   recebimentos.forEach(r=>{ if(r.data) addBucket(parseISO(r.data), 'entradas', r.valor||0); });
-  compras.forEach(c=>{ if(c.data) addBucket(parseISO(c.data), 'saidas', c.valorTotal||0); });
+  compras.forEach(c=>{ expandParcelasEventos(c).forEach(ev=> addBucket(parseISO(ev.data), 'saidas', ev.valor)); });
   const keys = Object.keys(buckets).sort((a,b)=> buckets[a].sortDate - buckets[b].sortDate);
   return {
     labels: keys.map(k=>periodLabelFor(k, periodType, projStart)),
@@ -2268,7 +2363,7 @@ function renderSaldoObra(){
   if(!canvas || typeof Chart==='undefined') return;
   const byDate = {};
   recebimentos.forEach(r=>{ if(r.data) byDate[r.data] = (byDate[r.data]||0) + (r.valor||0); });
-  compras.forEach(c=>{ if(c.data) byDate[c.data] = (byDate[c.data]||0) - (c.valorTotal||0); });
+  compras.forEach(c=>{ expandParcelasEventos(c).forEach(ev=>{ byDate[ev.data] = (byDate[ev.data]||0) - ev.valor; }); });
   const dates = Object.keys(byDate).sort();
   if(dates.length===0) return;
   let acc=0;
@@ -2287,11 +2382,20 @@ function renderSaldoObra(){
     }
   });
 }
+function renderResumoFluxoCaixa(){
+  renderResumoGastosTable(
+    document.getElementById('theadResumoFluxoCaixa'),
+    document.getElementById('tbodyResumoFluxoCaixa'),
+    document.getElementById('emptyResumoFluxoCaixa'),
+    compras
+  );
+}
 function renderFluxoCaixaAll(){
   renderRecebimentos();
   renderPrevRealizado();
   renderFluxoCaixaTempo();
   renderSaldoObra();
+  renderResumoFluxoCaixa();
 }
 function setupFluxoCaixaTab(){
   document.getElementById('btnAddRecebimento').addEventListener('click', addRecebimento);
@@ -3041,11 +3145,13 @@ function setupDiarioTab(){
    16. EMPRESA — ESCRITÓRIO / PATRIMÔNIO / ACESSOS / CONSOLIDAÇÃO
    (dados globais da empresa, compartilhados entre todas as obras)
    ============================================================ */
-let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[] };
+let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[], deposito:{compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]} };
 let nextEscDescricaoId = 1;
 let nextEscCustoId = 1;
 let nextPatrimonioId = 1;
 let nextColaboradorId = 1;
+let nextDepositoCompraId = 1;
+let nextDepositoConsumoId = 1;
 let saveSistemaDebounce = null;
 
 const SYSTEM_PAGES = [
@@ -3053,7 +3159,7 @@ const SYSTEM_PAGES = [
   {id:'bdi', label:'BDI'}, {id:'recursos', label:'Recursos'}, {id:'dashboard', label:'Dashboard'},
   {id:'compras', label:'Compras'}, {id:'estoque', label:'Estoque'}, {id:'fluxocaixa', label:'Fluxo de caixa'},
   {id:'composicoes', label:'Composições'}, {id:'quantitativos', label:'Quantitativos'},
-  {id:'escritorio', label:'Escritório'}, {id:'patrimonio', label:'Patrimônio'}, {id:'consolidacao', label:'Consolidação'},
+  {id:'escritorio', label:'Escritório'}, {id:'deposito', label:'Depósito'}, {id:'patrimonio', label:'Patrimônio'}, {id:'consolidacao', label:'Consolidação'},
   {id:'acessos', label:'Acessos'}, {id:'diario', label:'Diário de obra'}, {id:'producao', label:'Produção'},
   {id:'funcionarios', label:'Funcionários'}, {id:'configuracao', label:'Configuração'},
 ];
@@ -3068,7 +3174,7 @@ const FUNCOES_OPERARIO_BASE = [
 ];
 const CLIMA_OPCOES = ['Bom','Nublado','Chuvoso','Impraticável'];
 
-const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[]};
+const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[], deposito:{compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]}};
 let nextFuncionarioId = 1;
 let obrasCache = [];
 
@@ -3108,6 +3214,12 @@ async function loadSistemaGlobal(){
   nextPatrimonioId = (sistemaGlobal.patrimonio||[]).reduce((m,p)=>Math.max(m,p.id||0),0)+1;
   nextColaboradorId = (sistemaGlobal.colaboradores||[]).reduce((m,c)=>Math.max(m,c.id||0),0)+1;
   nextFuncionarioId = (sistemaGlobal.funcionarios||[]).reduce((m,f)=>Math.max(m,f.id||0),0)+1;
+  sistemaGlobal.deposito = sistemaGlobal.deposito || {compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]};
+  sistemaGlobal.deposito.compras = sistemaGlobal.deposito.compras || [];
+  sistemaGlobal.deposito.estoqueConsumos = sistemaGlobal.deposito.estoqueConsumos || [];
+  sistemaGlobal.deposito.estoqueTransferenciasRecebidas = sistemaGlobal.deposito.estoqueTransferenciasRecebidas || [];
+  nextDepositoCompraId = sistemaGlobal.deposito.compras.reduce((m,c)=>Math.max(m,c.id||0),0)+1;
+  nextDepositoConsumoId = sistemaGlobal.deposito.estoqueConsumos.reduce((m,u)=>Math.max(m,u.id||0),0)+1;
   seedColaboradorPadrao();
   await refreshObrasCache();
   renderEmpresaAll();
@@ -3120,6 +3232,7 @@ function renderEmpresaAll(){
   try{ renderPatrimonio(); }catch(e){ console.error('Patrimônio:', e); }
   try{ renderColaboradores(); }catch(e){ console.error('Acessos:', e); }
   try{ renderFuncionarios(); }catch(e){ console.error('Funcionários:', e); }
+  try{ renderDeposito(); }catch(e){ console.error('Depósito:', e); }
 }
 
 /* --- Escritório --- */
@@ -3128,6 +3241,8 @@ function escDescricaoChipHtml(d){
 }
 function renderEscDescricoes(){
   const wrap = document.getElementById('escDescricoesChips');
+  const datalist = document.getElementById('escDescList');
+  if(datalist) datalist.innerHTML = sistemaGlobal.escritorioDescricoes.map(d=>`<option value="${escapeAttr(d.nome)}">`).join('');
   if(!wrap) return;
   wrap.innerHTML = sistemaGlobal.escritorioDescricoes.length ? sistemaGlobal.escritorioDescricoes.map(escDescricaoChipHtml).join('') : '<span class="hint">Nenhuma descrição cadastrada ainda.</span>';
   wrap.querySelectorAll('[data-escdescremove]').forEach(btn=>{
@@ -3146,43 +3261,88 @@ function addEscDescricao(){
 function escDescOptionsHtml(selected){
   return `<option value="">—</option>` + sistemaGlobal.escritorioDescricoes.map(d=>`<option ${d.nome===selected?'selected':''}>${escapeXml(d.nome)}</option>`).join('');
 }
-function escCustoRowHtml(c){
+/* Linha de custo no formato "compra" (Tipo, Data, Loja, Nº nota/PIX, Forma pagto., Parc.,
+   Banco, Descrição, Quant., Unid., R$/unid, Valor total, Entrega) — usado em Escritório e Depósito. */
+function custoCompraRowHtml(c, prefix){
   const showParc = c.formaPagto==='Cartão de crédito';
-  return `<tr data-esccusto="${c.id}">
-    <td><input type="date" class="cell" data-ecf="data" data-esccusto="${c.id}" value="${c.data||''}"></td>
-    <td><select class="cell" data-ecf="item" data-esccusto="${c.id}">${escDescOptionsHtml(c.item)}</select></td>
-    <td><input type="text" class="cell" data-ecf="descricao" data-esccusto="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição livre"></td>
-    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ecf="valor" data-esccusto="${c.id}" value="${fmtInput(c.valor)}"></td>
-    <td><select class="cell" data-ecf="formaPagto" data-esccusto="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
-    <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-ecf="parcelas" data-esccusto="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
-    <td><button class="icon-btn" data-esccustoremove="${c.id}" title="Remover">✕</button></td>
+  return `<tr data-${prefix}="${c.id}">
+    <td><select class="cell" data-cxf="tipo" data-${prefix}="${c.id}">${TIPOS_COMPRA.map(t=>`<option ${t===c.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td><input type="date" class="cell" data-cxf="data" data-${prefix}="${c.id}" value="${c.data||''}"></td>
+    <td><input type="text" class="cell" data-cxf="loja" data-${prefix}="${c.id}" value="${escapeAttr(c.loja)}" placeholder="Loja / nome"></td>
+    <td><input type="text" class="cell" data-cxf="notaNum" data-${prefix}="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
+    <td><select class="cell" data-cxf="formaPagto" data-${prefix}="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
+    <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cxf="parcelas" data-${prefix}="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
+    <td><select class="cell" data-cxf="banco" data-${prefix}="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
+    <td><input type="text" class="cell" list="escDescList" data-cxf="descricao" data-${prefix}="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cxf="quantidade" data-${prefix}="${c.id}" value="${fmtInput(c.quantidade)}"></td>
+    <td><select class="cell" style="width:78px;" data-cxf="unidade" data-${prefix}="${c.id}">
+      <option value="">—</option>
+      ${UNIDADES_COMPRA.map(u=>`<option ${u===c.unidade?'selected':''}>${u}</option>`).join('')}
+    </select></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cxf="valorUnid" data-${prefix}="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)" data-${prefix}total="${c.id}">R$ ${fmtNum(c.valorTotal,2)}</td>
+    <td>
+      <select class="cell" data-cxf="entrega" data-${prefix}="${c.id}" style="margin-bottom:${c.entrega==='Entrega prevista'?'4px':'0'};">
+        <option ${c.entrega==='Recebido'||!c.entrega?'selected':''}>Recebido</option>
+        <option ${c.entrega==='Entrega prevista'?'selected':''}>Entrega prevista</option>
+      </select>
+      ${c.entrega==='Entrega prevista' ? `<input type="date" class="cell" data-cxf="dataEntregaPrevista" data-${prefix}="${c.id}" value="${c.dataEntregaPrevista||''}">` : ''}
+    </td>
+    <td><button class="icon-btn" data-${prefix}remove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
+}
+function bindCustoCompraEvents(tbodyId, prefix, list, onChange, onRemove){
+  const tbody = document.getElementById(tbodyId);
+  if(!tbody) return;
+  tbody.querySelectorAll('[data-cxf]').forEach(el=>{
+    if(el.dataset.cxf==='quantidade' || el.dataset.cxf==='valorUnid'){
+      el.addEventListener('input', ()=>{
+        const c = list.find(x=>String(x.id)===el.dataset[prefix]);
+        if(!c) return;
+        const qtyEl = tbody.querySelector(`[data-cxf="quantidade"][data-${prefix}="${c.id}"]`);
+        const priceEl = tbody.querySelector(`[data-cxf="valorUnid"][data-${prefix}="${c.id}"]`);
+        const qty = parseFloat(qtyEl && qtyEl.value)||0;
+        const price = parseFloat(priceEl && priceEl.value)||0;
+        c.valorTotal = round2(qty*price);
+        const totalCell = tbody.querySelector(`[data-${prefix}total="${c.id}"]`);
+        if(totalCell) totalCell.textContent = 'R$ ' + fmtNum(c.valorTotal, 2);
+      });
+    }
+    el.addEventListener('change', ()=>{
+      const c = list.find(x=>String(x.id)===el.dataset[prefix]);
+      if(!c) return;
+      const f = el.dataset.cxf;
+      if(f==='quantidade' || f==='valorUnid'){
+        c[f] = parseFloat(el.value)||0;
+        c.valorTotal = round2((c.quantidade||0)*(c.valorUnid||0));
+        const totalCell = tbody.querySelector(`[data-${prefix}total="${c.id}"]`);
+        if(totalCell) totalCell.textContent = 'R$ ' + fmtNum(c.valorTotal, 2);
+      } else if(f==='parcelas'){
+        c.parcelas = Math.max(1, parseInt(el.value,10)||1);
+      } else {
+        c[f] = el.value;
+      }
+      onChange(f);
+    });
+  });
+  tbody.querySelectorAll(`[data-${prefix}remove]`).forEach(btn=>{
+    btn.addEventListener('click', ()=> onRemove(btn.dataset[`${prefix}remove`]));
+  });
 }
 function renderEscCustos(){
   const tbody = document.getElementById('tbodyEscCustos');
   if(!tbody) return;
   const emptyEl = document.getElementById('emptyEscCustos');
   if(emptyEl) emptyEl.style.display = sistemaGlobal.escritorioCustos.length ? 'none':'block';
-  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(escCustoRowHtml).join('');
-  tbody.querySelectorAll('[data-ecf]').forEach(el=>{
-    el.addEventListener('change', ()=>{
-      const c = sistemaGlobal.escritorioCustos.find(x=>String(x.id)===el.dataset.esccusto);
-      if(!c) return;
-      const f = el.dataset.ecf;
-      if(f==='valor') c[f] = parseFloat(el.value)||0;
-      else if(f==='parcelas') c[f] = Math.max(1, parseInt(el.value,10)||1);
-      else c[f] = el.value;
-      saveSistemaGlobal();
-      if(f==='formaPagto'){ renderEscCustos(); return; }
-      renderEscCustosStats();
-      renderResumoEscCustos();
-    });
-  });
-  tbody.querySelectorAll('[data-esccustoremove]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      sistemaGlobal.escritorioCustos = sistemaGlobal.escritorioCustos.filter(c=>String(c.id)!==btn.dataset.esccustoremove);
-      renderEscCustos(); saveSistemaGlobal();
-    });
+  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(c=>custoCompraRowHtml(c,'esccusto')).join('');
+  bindCustoCompraEvents('tbodyEscCustos', 'esccusto', sistemaGlobal.escritorioCustos, (f)=>{
+    saveSistemaGlobal();
+    if(f==='formaPagto' || f==='entrega'){ renderEscCustos(); return; }
+    renderEscCustosStats();
+    renderResumoEscCustos();
+  }, (id)=>{
+    sistemaGlobal.escritorioCustos = sistemaGlobal.escritorioCustos.filter(c=>String(c.id)!==id);
+    renderEscCustos(); saveSistemaGlobal();
   });
   renderEscCustosStats();
   renderResumoEscCustos();
@@ -3190,9 +3350,9 @@ function renderEscCustos(){
 function renderEscCustosStats(){
   const strip = document.getElementById('escCustosStatsStrip');
   if(!strip) return;
-  const total = sistemaGlobal.escritorioCustos.reduce((s,c)=>s+(c.valor||0),0);
+  const total = sistemaGlobal.escritorioCustos.reduce((s,c)=>s+(c.valorTotal||0),0);
   const mesRef = toISO(new Date()).slice(0,7);
-  const mesAtual = sistemaGlobal.escritorioCustos.filter(c=>(c.data||'').slice(0,7)===mesRef).reduce((s,c)=>s+(c.valor||0),0);
+  const mesAtual = sistemaGlobal.escritorioCustos.filter(c=>(c.data||'').slice(0,7)===mesRef).reduce((s,c)=>s+(c.valorTotal||0),0);
   strip.innerHTML = `
     <div class="stat accent"><div class="lbl">Total lançado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
     <div class="stat"><div class="lbl">Mês atual</div><div class="val">R$ ${fmtNum(mesAtual,2)}</div></div>
@@ -3200,25 +3360,12 @@ function renderEscCustosStats(){
   `;
 }
 function renderResumoEscCustos(){
-  const thead = document.getElementById('theadResumoEscCustos');
-  const tbody = document.getElementById('tbodyResumoEscCustos');
-  const emptyEl = document.getElementById('emptyResumoEscCustos');
-  if(!thead || !tbody) return;
-  const custos = sistemaGlobal.escritorioCustos.filter(c=>c.data);
-  if(emptyEl) emptyEl.style.display = custos.length ? 'none':'block';
-  if(!custos.length){ thead.innerHTML=''; tbody.innerHTML=''; return; }
-  const meses = [...new Set(custos.map(c=>c.data.slice(0,7)))].sort();
-  const itens = [...new Set(sistemaGlobal.escritorioDescricoes.map(d=>d.nome).concat(custos.map(c=>c.item||'(sem item)')))].filter(Boolean);
-  thead.innerHTML = `<th style="min-width:150px;">Item</th>` + meses.map(m=>`<th class="num" style="width:100px;">${fmtMesLabel(m)}</th>`).join('') + `<th class="num" style="width:110px;">Total</th>`;
-  const linhas = itens.map(item=>{
-    const valoresPorMes = meses.map(m=>custos.filter(c=>(c.item||'(sem item)')===item && c.data.slice(0,7)===m).reduce((s,c)=>s+(c.valor||0),0));
-    const totalLinha = valoresPorMes.reduce((s,v)=>s+v,0);
-    return {item, valoresPorMes, totalLinha};
-  }).filter(l=>l.totalLinha>0.0001);
-  const totalGeralPorMes = meses.map((_,i)=>linhas.reduce((s,l)=>s+l.valoresPorMes[i],0));
-  const totalGeral = totalGeralPorMes.reduce((s,v)=>s+v,0);
-  tbody.innerHTML = linhas.map(l=>`<tr><td>${escapeXml(l.item)}</td>${l.valoresPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${v>0?fmtNum(v,2):'—'}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);font-weight:600;">${fmtNum(l.totalLinha,2)}</td></tr>`).join('')
-    + `<tr style="font-weight:600;background:var(--bg-inset);"><td>TOTAL</td>${totalGeralPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${fmtNum(v,2)}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);">${fmtNum(totalGeral,2)}</td></tr>`;
+  renderResumoGastosTable(
+    document.getElementById('theadResumoEscCustos'),
+    document.getElementById('tbodyResumoEscCustos'),
+    document.getElementById('emptyResumoEscCustos'),
+    sistemaGlobal.escritorioCustos
+  );
 }
 function fmtMesLabel(m){
   const [y,mo] = m.split('-');
@@ -3226,12 +3373,173 @@ function fmtMesLabel(m){
   return `${nomes[parseInt(mo,10)-1]}/${y.slice(2)}`;
 }
 function addEscCusto(){
-  sistemaGlobal.escritorioCustos.push({id: nextEscCustoId++, data: toISO(new Date()), item:'', descricao:'', valor:0, formaPagto:'PIX', parcelas:1});
+  sistemaGlobal.escritorioCustos.push({id: nextEscCustoId++, tipo:'Extra', data: toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0, entrega:'Recebido', dataEntregaPrevista:''});
   renderEscCustos(); saveSistemaGlobal();
 }
 function setupEscritorioTab(){
   document.getElementById('btnAddEscDescricao').addEventListener('click', addEscDescricao);
   document.getElementById('btnAddEscCusto').addEventListener('click', addEscCusto);
+}
+
+/* --- Depósito ---
+   Funciona como uma obra (tem compras e estoque), mas sem orçamento.
+   Dados ficam em sistemaGlobal.deposito, compartilhados entre todas as obras. */
+function computeDepositoGroups(){
+  const dep = sistemaGlobal.deposito;
+  const groups = {};
+  (dep.compras||[]).filter(c=>(c.tipo==='Material'||c.tipo==='Equipamento') && (c.descricao||'').trim()).forEach(c=>{
+    const key = estoqueKeyFor(c.descricao, c.unidade, c.tipo);
+    if(!groups[key]) groups[key] = {key, nome:c.descricao.trim(), unidade:c.unidade||'', tipo:c.tipo, recebido:0, saido:0};
+    groups[key].recebido += (c.quantidade||0);
+  });
+  (dep.estoqueTransferenciasRecebidas||[]).forEach(t=>{
+    const key = estoqueKeyFor(t.nome, t.unidade, t.tipo);
+    if(!groups[key]) groups[key] = {key, nome:t.nome, unidade:t.unidade||'', tipo:t.tipo||'Material', recebido:0, saido:0};
+    groups[key].recebido += (t.quantidade||0);
+  });
+  (dep.estoqueConsumos||[]).forEach(u=>{
+    if(!groups[u.materialKey]) return;
+    groups[u.materialKey].saido += (u.quantidade||0);
+  });
+  return Object.values(groups).map(g=>({...g, saldo: g.recebido-g.saido})).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+}
+function renderDeposito(){
+  renderDepositoEstoque();
+  renderDepositoCustos();
+}
+function renderDepositoEstoque(){
+  const groups = computeDepositoGroups();
+  const tbody = document.getElementById('tbodyDeposito');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyDeposito');
+  if(emptyEl) emptyEl.style.display = groups.length ? 'none' : 'block';
+  tbody.innerHTML = groups.map(g=>{
+    const cls = g.saldo<=0.0001 ? 'crit' : (g.recebido>0 && g.saldo < g.recebido*0.15 ? 'warn' : 'ok');
+    return `<tr>
+      <td>${escapeXml(g.nome)}</td>
+      <td><span class="badge ok">${escapeXml(g.tipo)}</span></td>
+      <td>${escapeXml(g.unidade)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(g.recebido,2)}</td>
+      <td class="num" style="font-family:var(--mono)">${fmtNum(g.saido,2)}</td>
+      <td class="num"><span class="badge ${cls}" style="font-family:var(--mono)">${fmtNum(g.saldo,2)}</span></td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;"><button class="btn small" data-depuse="${escapeAttr(g.key)}">Registrar uso</button><button class="btn small" data-deptransfer="${escapeAttr(g.key)}">Transferir p/ obra</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-depuse]').forEach(btn=>{
+    btn.addEventListener('click', ()=> registrarUsoDeposito(btn.dataset.depuse));
+  });
+  tbody.querySelectorAll('[data-deptransfer]').forEach(btn=>{
+    btn.addEventListener('click', ()=> transferirDeposito(btn.dataset.deptransfer));
+  });
+  renderDepositoMovList(groups);
+}
+function registrarUsoDeposito(key){
+  const qtyStr = prompt('Quantidade usada/baixada:');
+  if(qtyStr===null) return;
+  const qty = parseFloat(qtyStr.replace(',','.'));
+  if(!qty || qty<=0){ alert('Quantidade inválida.'); return; }
+  const dataStr = prompt('Data de uso (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
+  sistemaGlobal.deposito.estoqueConsumos.push({id:nextDepositoConsumoId++, materialKey:key, quantidade:qty, data:dataStr, motivo:'Uso/baixa no depósito'});
+  renderDepositoEstoque();
+  saveSistemaGlobal();
+}
+async function transferirDeposito(key){
+  if(!obrasCache.length) await refreshObrasCache();
+  if(!obrasCache.length){ showToast('Não há nenhuma obra cadastrada para transferir.'); return; }
+  const nomes = obrasCache.map((o,i)=>`${i+1}. ${o.nome||'(sem nome)'}`).join('\n');
+  const escolha = prompt(`Transferir para qual obra? Digite o número:\n${nomes}`);
+  const idx = parseInt(escolha,10)-1;
+  if(isNaN(idx) || !obrasCache[idx]) return;
+  const destino = obrasCache[idx];
+  const qtyStr = prompt('Quantidade a transferir:');
+  if(qtyStr===null) return;
+  const qty = parseFloat(qtyStr.replace(',','.'));
+  if(!qty || qty<=0){ alert('Quantidade inválida.'); return; }
+  const g = computeDepositoGroups().find(x=>x.key===key);
+  if(!g) return;
+  const dataStr = toISO(new Date());
+  sistemaGlobal.deposito.estoqueConsumos.push({id:nextDepositoConsumoId++, materialKey:key, quantidade:qty, data:dataStr, motivo:`Transferência → ${destino.nome}`});
+  renderDepositoEstoque();
+  saveSistemaGlobal();
+  try{
+    const rows = await supaRequest(`projetos?id=eq.${destino.id}&select=id,nome,dados`, {method:'GET'});
+    const destDados = (rows && rows[0] && rows[0].dados) || {};
+    destDados.estoqueTransferenciasRecebidas = destDados.estoqueTransferenciasRecebidas || [];
+    destDados.estoqueTransferenciasRecebidas.push({id: Date.now(), nome:g.nome, unidade:g.unidade, tipo:g.tipo, quantidade:qty, data:dataStr, origemObraNome: 'Depósito'});
+    await supaRequest('projetos', {method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify({id:destino.id, dados:destDados, atualizado_em:new Date().toISOString()})});
+    showToast(`${fmtNum(qty,2)} ${g.unidade||''} de "${g.nome}" transferido(a) do Depósito para ${destino.nome}.`);
+  }catch(e){
+    console.error(e);
+    showToast('Baixa registrada aqui, mas não consegui atualizar a obra de destino (verifique a conexão).');
+  }
+}
+function renderDepositoMovList(groups){
+  const wrap = document.getElementById('depositoMovList');
+  if(!wrap) return;
+  const consumos = sistemaGlobal.deposito.estoqueConsumos||[];
+  if(consumos.length===0){ wrap.innerHTML = ''; return; }
+  const nameByKey = {};
+  (groups||computeDepositoGroups()).forEach(g=>{ nameByKey[g.key] = g.nome + (g.unidade?` (${g.unidade})`:''); });
+  const sorted = [...consumos].sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  wrap.innerHTML = `<h4 class="sechead" style="font-family:var(--disp);font-size:11.5px;margin:0 0 6px;color:var(--text-dim);">Movimentações de saída</h4><div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:110px;">Data</th><th>Material/Equipamento</th><th class="num" style="width:110px;">Quant.</th><th style="min-width:150px;">Motivo</th><th style="width:34px;"></th></tr></thead><tbody>
+    ${sorted.map(u=>`<tr><td>${fmtDate(u.data)}</td><td>${escapeXml(nameByKey[u.materialKey]||u.materialKey)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(u.quantidade,2)}</td><td>${escapeXml(u.motivo||'')}</td><td><button class="icon-btn" data-depremoveuso="${u.id}" title="Remover">✕</button></td></tr>`).join('')}
+  </tbody></table></div>`;
+  wrap.querySelectorAll('[data-depremoveuso]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      sistemaGlobal.deposito.estoqueConsumos = sistemaGlobal.deposito.estoqueConsumos.filter(u=>String(u.id)!==btn.dataset.depremoveuso);
+      renderDepositoEstoque();
+      saveSistemaGlobal();
+    });
+  });
+}
+function renderDepositoCustos(){
+  const tbody = document.getElementById('tbodyDepositoCustos');
+  if(!tbody) return;
+  const dep = sistemaGlobal.deposito;
+  const emptyEl = document.getElementById('emptyDepositoCustos');
+  if(emptyEl) emptyEl.style.display = dep.compras.length ? 'none':'block';
+  tbody.innerHTML = dep.compras.map(c=>custoCompraRowHtml(c,'depcusto')).join('');
+  bindCustoCompraEvents('tbodyDepositoCustos', 'depcusto', dep.compras, (f)=>{
+    saveSistemaGlobal();
+    if(f==='formaPagto' || f==='entrega'){ renderDepositoCustos(); return; }
+    renderDepositoCustosStats();
+    renderResumoDepositoCustos();
+    renderDepositoEstoque();
+  }, (id)=>{
+    dep.compras = dep.compras.filter(c=>String(c.id)!==id);
+    renderDeposito(); saveSistemaGlobal();
+  });
+  renderDepositoCustosStats();
+  renderResumoDepositoCustos();
+}
+function renderDepositoCustosStats(){
+  const strip = document.getElementById('depositoCustosStatsStrip');
+  if(!strip) return;
+  const dep = sistemaGlobal.deposito;
+  const total = dep.compras.reduce((s,c)=>s+(c.valorTotal||0),0);
+  const mesRef = toISO(new Date()).slice(0,7);
+  const mesAtual = dep.compras.filter(c=>(c.data||'').slice(0,7)===mesRef).reduce((s,c)=>s+(c.valorTotal||0),0);
+  strip.innerHTML = `
+    <div class="stat accent"><div class="lbl">Total comprado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(total,2)}</div></div>
+    <div class="stat"><div class="lbl">Mês atual</div><div class="val">R$ ${fmtNum(mesAtual,2)}</div></div>
+    <div class="stat"><div class="lbl">Registros</div><div class="val">${dep.compras.length}</div></div>
+  `;
+}
+function renderResumoDepositoCustos(){
+  renderResumoGastosTable(
+    document.getElementById('theadResumoDepositoCustos'),
+    document.getElementById('tbodyResumoDepositoCustos'),
+    document.getElementById('emptyResumoDepositoCustos'),
+    sistemaGlobal.deposito.compras
+  );
+}
+function addDepositoCompra(){
+  sistemaGlobal.deposito.compras.push({id: nextDepositoCompraId++, tipo:'Material', data: toISO(new Date()), loja:'', notaNum:'', formaPagto:'PIX', parcelas:1, banco:'', descricao:'', quantidade:1, unidade:'', valorUnid:0, valorTotal:0, entrega:'Recebido', dataEntregaPrevista:''});
+  renderDepositoCustos(); renderDepositoEstoque(); saveSistemaGlobal();
+}
+function setupDepositoTab(){
+  const btn = document.getElementById('btnAddDepositoCompra');
+  if(btn) btn.addEventListener('click', addDepositoCompra);
 }
 
 /* --- Patrimônio --- */
@@ -3419,16 +3727,37 @@ function salarioFuncaoRowHtml(funcao){
   </tr>`;
 }
 function renderSalariosFuncao(){
-  const tbody = document.getElementById('tbodySalariosFuncao');
+  const tbody = document.getElementById('tbodySalariosFuncaoModal');
   if(!tbody) return;
   tbody.innerHTML = allFuncoesOperario().map(salarioFuncaoRowHtml).join('');
   tbody.querySelectorAll('[data-salval]').forEach(el=>{
     el.addEventListener('change', ()=>{
       sistemaGlobal.salariosPorFuncao[el.dataset.salfuncao] = parseFloat(el.value)||0;
-      renderFuncionarios();
+      renderSalariosFuncao();
+      renderEfetivoPorObra();
       saveSistemaGlobal();
     });
   });
+}
+function salariosModalHtml(){
+  return `<h3>Salários por função</h3>
+    <p>Defina o valor salarial de cada função. O salário do funcionário é sempre puxado desta tabela.</p>
+    <div class="tbl-wrap" style="max-height:65vh;overflow-y:auto;"><table class="qtbl zebra" id="tblSalariosFuncaoModal">
+      <thead><tr><th style="min-width:180px;">Função</th><th style="width:130px;" class="num">Salário (R$)</th></tr></thead>
+      <tbody id="tbodySalariosFuncaoModal"></tbody>
+    </table></div>
+    <div class="modal-actions"><button class="btn primary" id="salModalCloseBtn">Fechar</button></div>`;
+}
+function openSalariosModal(){
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  box.classList.add('wide');
+  box.innerHTML = salariosModalHtml();
+  overlay.style.display = 'flex';
+  renderSalariosFuncao();
+  function close(){ overlay.style.display='none'; box.classList.remove('wide'); box.innerHTML=''; try{ renderFuncionarios(); }catch(e){} }
+  document.getElementById('salModalCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
 }
 function computeEfetivoPorObraFuncao(){
   const grid = {};
@@ -3507,50 +3836,76 @@ function addFuncionario(){
   const nome = (prompt('Nome do funcionário:')||'').trim();
   if(!nome) return;
   sistemaGlobal.funcionarios.push({
-    id: nextFuncionarioId++, nome, endereco:'', cpf:'', rg:'', ctps:'', cep:'', bairro:'',
-    email:'', pix:'', contaBancaria:'', agencia:'', operacao:'',
+    id: nextFuncionarioId++, nome, endereco:'', numero:'', complemento:'', cpf:'', rg:'', ctps:'', cep:'', bairro:'',
+    email:'', celular:'', banco:'', pix:'', contaBancaria:'', agencia:'', operacao:'',
     funcao: FUNCOES_OPERARIO_BASE[0], obraId: currentProjectId||'',
-    faltasAtestados:[], observacoesHist:[], pagamentos:[],
+    observacoesHist:[], pagamentos:[],
   });
   renderFuncionarios(); saveSistemaGlobal();
 }
 function novoRegistroId(){ return Date.now()+Math.floor(Math.random()*1000); }
+/* Busca faltas/atestados/faltas justificadas automaticamente no Diário de obra
+   de TODAS as obras (o funcionário pode ter sido transferido entre elas). */
+async function computeFuncionarioFaltasAtestados(funcId){
+  let rows;
+  try{ rows = await supaListProjectsFull(); }catch(e){ console.error(e); return []; }
+  const registros = [];
+  (rows||[]).forEach(row=>{
+    const d = row.dados || {};
+    const obraNome = d.config?.nome || row.nome || 'Obra sem nome';
+    (d.diarioObra||[]).forEach(entry=>{
+      const r = (entry.efetivo||[]).find(x=>String(x.funcionarioId)===String(funcId));
+      if(!r || !entry.data) return;
+      let tipo = null;
+      if(r.atestado) tipo = 'Atestado';
+      else if(r.faltaJustificada) tipo = 'Falta justificada';
+      else if(!r.manha && !r.tarde) tipo = 'Falta';
+      if(!tipo) return;
+      registros.push({data:entry.data, tipo, obs: entry.ocorrencias||'', obra: obraNome});
+    });
+  });
+  registros.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  return registros;
+}
 function funcionarioModalHtml(f){
   const salario = sistemaGlobal.salariosPorFuncao[f.funcao];
-  f.faltasAtestados = f.faltasAtestados || [];
   f.observacoesHist = f.observacoesHist || [];
   f.pagamentos = f.pagamentos || [];
   return `
     <h3>${escapeXml(f.nome)}</h3>
     <div class="qsection" style="padding-top:0;">
-      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Dados pessoais</h4>
+      <h4 class="sechead">Dados pessoais</h4>
       <div class="config-grid">
         <div class="field-row"><label>Nome</label><input type="text" class="cell" data-fm="nome" value="${escapeAttr(f.nome)}"></div>
-        <div class="field-row"><label>CPF</label><input type="text" class="cell" data-fm="cpf" value="${escapeAttr(f.cpf)}"></div>
-        <div class="field-row"><label>RG</label><input type="text" class="cell" data-fm="rg" value="${escapeAttr(f.rg)}"></div>
+        <div class="field-row"><label>CPF</label><input type="text" class="cell" data-fm="cpf" data-mask="cpf" placeholder="000.000.000-00" value="${escapeAttr(f.cpf)}"></div>
+        <div class="field-row"><label>RG</label><input type="text" class="cell" data-fm="rg" data-mask="rg" placeholder="000.000.000" value="${escapeAttr(f.rg)}"></div>
         <div class="field-row"><label>CTPS</label><input type="text" class="cell" data-fm="ctps" value="${escapeAttr(f.ctps)}"></div>
         <div class="field-row"><label>Endereço</label><input type="text" class="cell" data-fm="endereco" value="${escapeAttr(f.endereco)}"></div>
-        <div class="field-row"><label>CEP</label><input type="text" class="cell" data-fm="cep" value="${escapeAttr(f.cep)}"></div>
+        <div class="field-row"><label>Número</label><input type="text" class="cell" data-fm="numero" value="${escapeAttr(f.numero)}"></div>
         <div class="field-row"><label>Bairro</label><input type="text" class="cell" data-fm="bairro" value="${escapeAttr(f.bairro)}"></div>
+        <div class="field-row"><label>Complemento</label><input type="text" class="cell" data-fm="complemento" value="${escapeAttr(f.complemento)}"></div>
+        <div class="field-row"><label>CEP</label><input type="text" class="cell" data-fm="cep" data-mask="cep" placeholder="00.000-00" value="${escapeAttr(f.cep)}"></div>
       </div>
     </div>
     <div class="qsection">
-      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Contato</h4>
+      <h4 class="sechead">Contato</h4>
       <div class="config-grid">
         <div class="field-row"><label>E-mail</label><input type="email" class="cell" data-fm="email" value="${escapeAttr(f.email)}"></div>
-        <div class="field-row"><label>PIX</label><input type="text" class="cell" data-fm="pix" value="${escapeAttr(f.pix)}"></div>
+        <div class="field-row"><label>Celular</label><input type="text" class="cell" data-fm="celular" data-mask="celular" placeholder="(00) 0 0000-0000" value="${escapeAttr(f.celular)}"></div>
       </div>
     </div>
     <div class="qsection">
-      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Dados bancários</h4>
+      <h4 class="sechead">Dados bancários</h4>
       <div class="config-grid">
-        <div class="field-row"><label>Conta</label><input type="text" class="cell" data-fm="contaBancaria" value="${escapeAttr(f.contaBancaria)}"></div>
+        <div class="field-row"><label>Banco</label><input type="text" class="cell" data-fm="banco" value="${escapeAttr(f.banco)}"></div>
+        <div class="field-row"><label>PIX</label><input type="text" class="cell" data-fm="pix" value="${escapeAttr(f.pix)}"></div>
         <div class="field-row"><label>Agência</label><input type="text" class="cell" data-fm="agencia" value="${escapeAttr(f.agencia)}"></div>
+        <div class="field-row"><label>Conta bancária</label><input type="text" class="cell" data-fm="contaBancaria" value="${escapeAttr(f.contaBancaria)}"></div>
         <div class="field-row"><label>Operação (OP)</label><input type="text" class="cell" data-fm="operacao" value="${escapeAttr(f.operacao)}"></div>
       </div>
     </div>
     <div class="qsection">
-      <h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;">Trabalho</h4>
+      <h4 class="sechead">Trabalho</h4>
       <div class="config-grid">
         <div class="field-row"><label>Função</label><select class="cell" data-fm="funcao">${funcaoOperarioOptionsHtml(f.funcao)}</select></div>
         <div class="field-row"><label>Obra/Status</label><select class="cell" data-fm="obraId">${obraStatusOptionsHtml(f.obraId)}</select></div>
@@ -3558,37 +3913,46 @@ function funcionarioModalHtml(f){
       <p class="hint" style="margin-top:6px;">Salário da função "${escapeXml(f.funcao)}": ${salario?('R$ '+fmtNum(salario,2)):'não definido na tabela de Salários'}</p>
     </div>
     <div class="qsection">
-      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Faltas, atestados e faltas justificadas</h4><button class="btn small" id="fmAddFalta">+ Registrar</button></div>
-      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:150px;">Tipo</th><th>Observação</th><th style="width:30px;"></th></tr></thead>
-        <tbody>${f.faltasAtestados.map(r=>`<tr><td>${fmtDate(r.data)}</td><td>${escapeXml(r.tipo)}</td><td>${escapeXml(r.obs||'')}</td><td><button class="icon-btn" data-fmremovefalta="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum registro</td></tr>'}</tbody>
+      <h4 class="sechead">Faltas, atestados e faltas justificadas</h4>
+      <p class="desc" style="margin-top:-4px;">Puxado automaticamente do Diário de obra de todas as obras (o funcionário pode ter sido transferido de obra).</p>
+      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:150px;">Tipo</th><th>Observação</th><th style="min-width:130px;">Obra</th></tr></thead>
+        <tbody id="fmFaltasBody"><tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Carregando…</td></tr></tbody>
       </table></div>
     </div>
     <div class="qsection">
-      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Observações</h4><button class="btn small" id="fmAddObs">+ Adicionar</button></div>
+      <div class="toolbar-row"><h4 class="sechead" style="margin:0;">Observações</h4><button class="btn small" id="fmAddObs">+ Adicionar</button></div>
       <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:150px;">Obra</th><th>Descrição</th><th style="width:30px;"></th></tr></thead>
         <tbody>${f.observacoesHist.map(r=>`<tr><td>${fmtDate(r.data)}</td><td>${escapeXml(r.obra||'')}</td><td>${escapeXml(r.descricao||'')}</td><td><button class="icon-btn" data-fmremoveobs="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhuma observação</td></tr>'}</tbody>
       </table></div>
     </div>
     <div class="qsection">
-      <div class="toolbar-row"><h4 style="font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0;text-transform:uppercase;letter-spacing:.04em;">Histórico de pagamentos</h4><button class="btn small" id="fmAddPag">+ Registrar pagamento</button></div>
-      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:110px;" class="num">Valor (R$)</th><th>Observação</th><th style="width:30px;"></th></tr></thead>
-        <tbody>${f.pagamentos.map(r=>`<tr><td>${fmtDate(r.data)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.valor,2)}</td><td>${escapeXml(r.obs||'')}</td><td><button class="icon-btn" data-fmremovepag="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum pagamento</td></tr>'}</tbody>
+      <div class="toolbar-row"><h4 class="sechead" style="margin:0;">Histórico de pagamentos</h4><button class="btn small" id="fmAddPag">+ Registrar pagamento</button></div>
+      <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th style="width:100px;">Data</th><th style="width:110px;" class="num">Valor (R$)</th><th>Observação</th><th style="min-width:130px;">Obra</th><th style="width:30px;"></th></tr></thead>
+        <tbody>${f.pagamentos.map(r=>`<tr><td>${fmtDate(r.data)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(r.valor,2)}</td><td>${escapeXml(r.obs||'')}</td><td>${escapeXml(r.obra||'')}</td><td><button class="icon-btn" data-fmremovepag="${r.id}">✕</button></td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum pagamento</td></tr>'}</tbody>
       </table></div>
     </div>
     <div class="modal-actions"><button class="btn primary" id="fmCloseBtn">Fechar</button></div>
   `;
+}
+function funcionarioObraEscolha(){
+  const opcoes = ['Escritório', 'Depósito', ...obrasCache.map(o=>o.nome||'(sem nome)')];
+  const nomes = opcoes.map((o,i)=>`${i+1}. ${o}`).join('\n');
+  const escolha = prompt(`Obra relacionada? Digite o número (ou deixe em branco):\n${nomes}`);
+  const idx = parseInt(escolha,10)-1;
+  return (!isNaN(idx) && opcoes[idx]) ? opcoes[idx] : '';
 }
 function openFuncionarioModal(funcId){
   const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(funcId));
   if(!f) return;
   const overlay = document.getElementById('modalOverlay');
   const box = document.getElementById('modalBox');
-  box.style.maxWidth = '760px';
+  box.classList.add('wide');
   box.innerHTML = funcionarioModalHtml(f);
   overlay.style.display = 'flex';
-  function close(){ overlay.style.display='none'; box.style.maxWidth=''; renderFuncionarios(); }
+  function close(){ overlay.style.display='none'; box.classList.remove('wide'); box.innerHTML=''; renderFuncionarios(); }
   document.getElementById('fmCloseBtn').addEventListener('click', close);
   overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
+  box.querySelectorAll('[data-mask]').forEach(el=> bindMaskedInput(el, FIELD_MASKS[el.dataset.mask]));
   box.querySelectorAll('[data-fm]').forEach(el=>{
     el.addEventListener('change', ()=>{
       const fld = el.dataset.fm;
@@ -3606,25 +3970,14 @@ function openFuncionarioModal(funcId){
       openFuncionarioModal(f.id);
     });
   });
-  document.getElementById('fmAddFalta').addEventListener('click', ()=>{
-    const tipo = (prompt('Tipo (Falta / Atestado / Falta justificada):','Falta')||'').trim();
-    if(!tipo) return;
-    const data = prompt('Data (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
-    const obs = prompt('Observação (opcional):','') || '';
-    f.faltasAtestados.push({id:novoRegistroId(), tipo, data, obs});
-    saveSistemaGlobal();
-    openFuncionarioModal(f.id);
-  });
-  box.querySelectorAll('[data-fmremovefalta]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      f.faltasAtestados = f.faltasAtestados.filter(r=>String(r.id)!==btn.dataset.fmremovefalta);
-      saveSistemaGlobal();
-      openFuncionarioModal(f.id);
-    });
+  computeFuncionarioFaltasAtestados(f.id).then(registros=>{
+    const tbody = document.getElementById('fmFaltasBody');
+    if(!tbody) return;
+    tbody.innerHTML = registros.length ? registros.map(r=>`<tr><td>${fmtDate(r.data)}</td><td>${escapeXml(r.tipo)}</td><td>${escapeXml(r.obs||'')}</td><td>${escapeXml(r.obra||'')}</td></tr>`).join('') : '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:10px;">Nenhum registro encontrado no Diário de obra</td></tr>';
   });
   document.getElementById('fmAddObs').addEventListener('click', ()=>{
     const data = prompt('Data (AAAA-MM-DD):', toISO(new Date())) || toISO(new Date());
-    const obra = prompt('Obra relacionada:','') || '';
+    const obra = funcionarioObraEscolha();
     const descricao = prompt('Descrição:','') || '';
     f.observacoesHist.push({id:novoRegistroId(), data, obra, descricao});
     saveSistemaGlobal();
@@ -3642,7 +3995,8 @@ function openFuncionarioModal(funcId){
     const valorStr = prompt('Valor (R$):','0');
     const valor = parseFloat((valorStr||'0').replace(',','.'))||0;
     const obs = prompt('Observação (opcional):','') || '';
-    f.pagamentos.push({id:novoRegistroId(), data, valor, obs});
+    const obra = funcionarioObraEscolha();
+    f.pagamentos.push({id:novoRegistroId(), data, valor, obs, obra});
     saveSistemaGlobal();
     openFuncionarioModal(f.id);
   });
@@ -3656,6 +4010,8 @@ function openFuncionarioModal(funcId){
 }
 async function setupFuncionariosTab(){
   document.getElementById('btnAddFuncionario').addEventListener('click', addFuncionario);
+  const btnSal = document.getElementById('btnOpenSalarios');
+  if(btnSal) btnSal.addEventListener('click', openSalariosModal);
   await refreshObrasCache();
   renderFuncionarios();
 }
@@ -3713,10 +4069,11 @@ function renderConsolidacao(){
   const andamentoMedio = totalObras ? consolidacaoObras.reduce((s,o)=>s+o.andamento,0)/totalObras : 0;
   const totalEntradas = consolidacaoObras.reduce((s,o)=>s+o.totalEntradas,0);
   const totalSaidasObras = consolidacaoObras.reduce((s,o)=>s+o.totalSaidas,0);
-  const totalEscritorio = (sistemaGlobal.escritorioCustos||[]).reduce((s,c)=>s+(c.valor||0),0);
+  const totalEscritorio = (sistemaGlobal.escritorioCustos||[]).reduce((s,c)=>s+(c.valorTotal||0),0);
+  const totalDeposito = (sistemaGlobal.deposito?.compras||[]).reduce((s,c)=>s+(c.valorTotal||0),0);
   const totalPatrimonio = (sistemaGlobal.patrimonio||[]).reduce((s,p)=>s+(p.valor||0),0);
-  const saldoConsolidado = totalEntradas - totalSaidasObras - totalEscritorio - totalPatrimonio;
-  const lucroEstimado = consolidacaoObras.reduce((s,o)=>s+(o.totalOrcado - o.totalSaidas),0) - totalEscritorio;
+  const saldoConsolidado = totalEntradas - totalSaidasObras - totalEscritorio - totalDeposito - totalPatrimonio;
+  const lucroEstimado = consolidacaoObras.reduce((s,o)=>s+(o.totalOrcado - o.totalSaidas),0) - totalEscritorio - totalDeposito;
 
   const strip = document.getElementById('consolidacaoStatsStrip');
   if(strip){
@@ -3724,7 +4081,7 @@ function renderConsolidacao(){
       <div class="stat"><div class="lbl">Obras</div><div class="val">${totalObras}</div></div>
       <div class="stat"><div class="lbl">Andamento médio</div><div class="val">${fmtNum(andamentoMedio,0)}%</div></div>
       <div class="stat"><div class="lbl">Entradas (todas obras)</div><div class="val">R$ ${fmtNum(totalEntradas,2)}</div></div>
-      <div class="stat"><div class="lbl">Saídas (obras+escritório+patrim.)</div><div class="val">R$ ${fmtNum(totalSaidasObras+totalEscritorio+totalPatrimonio,2)}</div></div>
+      <div class="stat"><div class="lbl">Saídas (obras+escritório+depósito+patrim.)</div><div class="val">R$ ${fmtNum(totalSaidasObras+totalEscritorio+totalDeposito+totalPatrimonio,2)}</div></div>
       <div class="stat accent"><div class="lbl">Saldo consolidado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(saldoConsolidado,2)}</div></div>
       <div class="stat accent"><div class="lbl">Lucro estimado</div><div class="val" style="font-size:17px;">R$ ${fmtNum(lucroEstimado,2)}</div></div>
     `;
@@ -3745,6 +4102,7 @@ function renderConsolidacao(){
   renderConsolidacaoChart();
   renderExpectativaSaldoChart();
   renderComprasConsolidadas();
+  renderResumoFinanceiro();
   if(extratoLinhas.length) renderConciliacao();
 }
 function renderComprasConsolidadas(){
@@ -3786,9 +4144,10 @@ function computeExpectativaEventos(){
   const eventos = [];
   consolidacaoObras.forEach(o=>{
     (o.recebimentos||[]).forEach(r=>{ if(r.data) eventos.push({data:r.data, valor:r.valor||0, origem:o.nome+' · recebimento'}); });
-    (o.compras||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valorTotal||0), origem:o.nome+' · compra'}); });
+    (o.compras||[]).forEach(c=>{ expandParcelasEventos(c).forEach(ev=>eventos.push({data:ev.data, valor:-ev.valor, origem:o.nome+' · compra'+(ev.parcela?` (${ev.parcela})`:'')})); });
   });
-  (sistemaGlobal.escritorioCustos||[]).forEach(c=>{ if(c.data) eventos.push({data:c.data, valor:-(c.valor||0), origem:'Escritório · '+(c.item||c.descricao||'custo')}); });
+  (sistemaGlobal.escritorioCustos||[]).forEach(c=>{ expandParcelasEventos(c).forEach(ev=>eventos.push({data:ev.data, valor:-ev.valor, origem:'Escritório · '+(c.descricao||c.tipo||'custo')+(ev.parcela?` (${ev.parcela})`:'')})); });
+  (sistemaGlobal.deposito?.compras||[]).forEach(c=>{ expandParcelasEventos(c).forEach(ev=>eventos.push({data:ev.data, valor:-ev.valor, origem:'Depósito · '+(c.descricao||c.tipo||'custo')+(ev.parcela?` (${ev.parcela})`:'')})); });
   (sistemaGlobal.patrimonio||[]).forEach(p=>{ if(p.dataAquisicao) eventos.push({data:p.dataAquisicao, valor:-(p.valor||0), origem:'Patrimônio · '+(p.nome||'bem')}); });
   return eventos.sort((a,b)=>a.data.localeCompare(b.data));
 }
@@ -3866,10 +4225,48 @@ function renderConciliacao(){
     return `<tr><td>${fmtDate(l.data)}</td><td>${escapeXml(l.descricao)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(l.valor,2)}</td><td>${situacao}</td></tr>`;
   }).join('');
 }
+function renderFinResumoOptions(){
+  const sel = document.getElementById('finResumoSelect');
+  if(!sel) return;
+  const prev = sel.value || '__todas__';
+  sel.innerHTML = `<option value="__todas__">Todas as obras (consolidado)</option>`
+    + consolidacaoObras.map(o=>`<option value="${o.id}">${escapeXml(o.nome)}</option>`).join('')
+    + `<option value="__escritorio__">Escritório</option>`
+    + `<option value="__deposito__">Depósito</option>`;
+  const stillExists = Array.from(sel.options).some(o=>o.value===prev);
+  sel.value = stillExists ? prev : '__todas__';
+}
+function comprasFinResumoSelecionadas(){
+  const sel = document.getElementById('finResumoSelect');
+  const val = sel ? sel.value : '__todas__';
+  if(val==='__escritorio__') return sistemaGlobal.escritorioCustos||[];
+  if(val==='__deposito__') return (sistemaGlobal.deposito?.compras)||[];
+  if(val==='__todas__' || !val) return consolidacaoObras.reduce((acc,o)=>acc.concat(o.compras||[]),[]);
+  const obra = consolidacaoObras.find(o=>String(o.id)===String(val));
+  return obra ? (obra.compras||[]) : [];
+}
+function renderResumoFinanceiro(){
+  renderFinResumoOptions();
+  renderResumoGastosTable(
+    document.getElementById('theadResumoFinanceiro'),
+    document.getElementById('tbodyResumoFinanceiro'),
+    document.getElementById('emptyResumoFinanceiro'),
+    comprasFinResumoSelecionadas()
+  );
+}
 function setupConsolidacaoTab(){
   document.getElementById('btnRefreshConsolidacao').addEventListener('click', refreshConsolidacao);
   document.getElementById('extratoFileInput').addEventListener('change', onExtratoFileSelected);
   document.getElementById('btnAddBanco').addEventListener('click', addBanco);
+  const finSel = document.getElementById('finResumoSelect');
+  if(finSel) finSel.addEventListener('change', ()=>{
+    renderResumoGastosTable(
+      document.getElementById('theadResumoFinanceiro'),
+      document.getElementById('tbodyResumoFinanceiro'),
+      document.getElementById('emptyResumoFinanceiro'),
+      comprasFinResumoSelecionadas()
+    );
+  });
 }
 
 /* ============================================================
@@ -4082,6 +4479,8 @@ function setupTabs(){
       if(btn.dataset.tab==='recursos') setTimeout(renderRecursos, 30);
       if(btn.dataset.tab==='fluxocaixa') setTimeout(renderFluxoCaixaAll, 30);
       if(btn.dataset.tab==='consolidacao') setTimeout(renderConsolidacao, 30);
+      if(btn.dataset.tab==='deposito') setTimeout(renderDeposito, 30);
+      if(btn.dataset.tab==='funcionarios') setTimeout(renderFuncionarios, 30);
       document.getElementById('sidebar').classList.remove('open');
     });
   });
@@ -4130,6 +4529,7 @@ function setupTopbar(){
   setupComposicoesTab();
   setupQuantitativosTab();
   setupEscritorioTab();
+  setupDepositoTab();
   setupPatrimonioTab();
   setupConsolidacaoTab();
   setupAcessosTab();

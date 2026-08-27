@@ -272,13 +272,17 @@ table.qtbl th, table.qtbl td{white-space:nowrap;}
 .resumo-tbl td:first-child{color:var(--text-dim);}
 .resumo-tbl td.num{font-family:var(--mono);color:var(--accent);font-weight:600;}
 
-.modal-overlay{position:fixed;inset:0;background:rgba(10,12,15,0.65);display:flex;align-items:center;justify-content:center;z-index:2000;}
-.modal-box{background:var(--bg-panel-raised);border:1px solid var(--line);border-radius:4px;padding:22px 24px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
+.modal-overlay{position:fixed;inset:0;background:rgba(10,12,15,0.65);display:flex;align-items:center;justify-content:center;z-index:2000;padding:24px;}
+.modal-box{background:var(--bg-panel-raised);border:1px solid var(--line);border-radius:4px;padding:22px 24px;max-width:400px;width:90%;max-height:calc(100vh - 48px);overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.6);}
 .modal-box h3{font-family:var(--disp);font-size:16px;margin:0 0 8px;}
 .modal-box p{color:var(--text-dim);font-size:13px;line-height:1.5;margin:0 0 18px;}
-.modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;position:sticky;bottom:-22px;background:var(--bg-panel-raised);padding:14px 0 0;margin-top:14px;}
 .modal-box input.cell{margin-bottom:10px;}
 .modal-box .modal-error{color:var(--red);font-size:12px;margin:-6px 0 12px;display:none;}
+.modal-box.wide{max-width:900px;}
+.modal-box h4.sechead{font-family:var(--disp);font-size:11px;color:var(--text-dim);margin:0 0 10px;text-transform:uppercase;letter-spacing:.04em;}
+.two-col{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;}
+.two-col>div{flex:1;min-width:300px;}
 
 /* ---------- orçamento: linhas item / subitem principal / drag ---------- */
 .tr-orc-item td{background:#242b21;font-weight:600;color:var(--text);border-top:1px solid var(--line);}
@@ -336,6 +340,7 @@ tr[draggable="true"]{cursor:default;}
       <div class="navsep"></div>
       <button class="navbtn" data-tab="consolidacao"><span class="ico">14</span> Financeiro</button>
       <button class="navbtn" data-tab="escritorio"><span class="ico">15</span> Escritório</button>
+      <button class="navbtn" data-tab="deposito"><span class="ico">15b</span> Depósito</button>
       <button class="navbtn" data-tab="funcionarios"><span class="ico">16</span> Funcionários</button>
       <button class="navbtn" data-tab="patrimonio"><span class="ico">17</span> Patrimônio</button>
       <div class="navsep"></div>
@@ -779,6 +784,16 @@ tr[draggable="true"]{cursor:default;}
             <canvas id="chartSaldoObra"></canvas>
           </div>
         </div>
+
+        <div class="card">
+          <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
+          <p class="desc">Soma das compras desta obra por tipo (Mão de obra, Materiais, Equipamentos, Extra), cruzando com o mês do lançamento. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoFluxoCaixa">
+            <thead><tr id="theadResumoFluxoCaixa"></tr></thead>
+            <tbody id="tbodyResumoFluxoCaixa"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyResumoFluxoCaixa" style="display:none;padding:20px;">Lance compras para ver o resumo por mês.</div>
+        </div>
       </div>
       <div class="panel" id="panel-composicoes">
         <div class="card">
@@ -963,42 +978,116 @@ tr[draggable="true"]{cursor:default;}
           <h2><span class="tag">empresa</span>Escritório</h2>
           <p class="desc">Custos fixos e variáveis do escritório central (água, energia, internet, aluguel etc). Estes dados são <b>da empresa</b>, não de uma obra específica, e ficam disponíveis em qualquer projeto que você abrir.</p>
         </div>
-        <div class="card">
-          <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
-            <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
+        <datalist id="escDescList"></datalist>
+        <div class="two-col">
+          <div class="card" style="margin:0;">
+            <div class="toolbar-row">
+              <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
+              <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
+            </div>
+            <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem como sugestão de autocompletar no campo "Descrição" da tabela de custos.</p>
+            <div id="escDescricoesChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
           </div>
-          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem no dropdown "Item" da tabela de custos abaixo.</p>
-          <div id="escDescricoesChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-        </div>
-        <div class="card">
-          <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">custos</span>Custos do escritório</h2>
-            <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
+          <div class="card" style="margin:0;flex:2;min-width:520px;">
+            <div class="toolbar-row">
+              <h2 style="margin:0;"><span class="tag">custos</span>Custo do escritório</h2>
+              <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
+            </div>
+            <div class="stats" id="escCustosStatsStrip"></div>
+            <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
+              <thead><tr>
+                <th style="width:120px;">Tipo</th>
+                <th style="width:120px;">Data</th>
+                <th style="min-width:130px;">Loja / nome</th>
+                <th style="width:100px;">Nº nota/PIX</th>
+                <th style="width:150px;">Forma pagto.</th>
+                <th style="width:60px;">Parc.</th>
+                <th style="width:110px;">Banco</th>
+                <th style="min-width:150px;">Descrição</th>
+                <th style="width:80px;" class="num">Quant.</th>
+                <th style="width:80px;">Unid.</th>
+                <th style="width:90px;" class="num">R$/unid</th>
+                <th style="width:110px;" class="num">Valor total</th>
+                <th style="width:150px;">Entrega</th>
+                <th style="width:34px;"></th>
+              </tr></thead>
+              <tbody id="tbodyEscCustos"></tbody>
+            </table></div>
+            <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
           </div>
-          <div class="stats" id="escCustosStatsStrip"></div>
-          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
-            <thead><tr>
-              <th style="width:120px;">Data</th>
-              <th style="width:150px;">Item</th>
-              <th style="min-width:160px;">Descrição</th>
-              <th style="width:110px;" class="num">Valor (R$)</th>
-              <th style="width:150px;">Forma de pagamento</th>
-              <th style="width:60px;">Parc.</th>
-              <th style="width:34px;"></th>
-            </tr></thead>
-            <tbody id="tbodyEscCustos"></tbody>
-          </table></div>
-          <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
         </div>
         <div class="card">
           <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
-          <p class="desc">Soma dos valores lançados, cruzando cada item de linha com o mês do lançamento.</p>
+          <p class="desc">Soma dos valores lançados por tipo (Mão de obra, Material, Equipamento, Extra), cruzando com o mês do lançamento. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
           <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoEscCustos">
             <thead><tr id="theadResumoEscCustos"></tr></thead>
             <tbody id="tbodyResumoEscCustos"></tbody>
           </table></div>
           <div class="empty-state" id="emptyResumoEscCustos" style="display:none;padding:20px;">Lance custos para ver o resumo por mês.</div>
+        </div>
+      </div>
+
+      <!-- ===================== DEPÓSITO ===================== -->
+      <div class="panel" id="panel-deposito">
+        <div class="card">
+          <h2><span class="tag">empresa</span>Depósito</h2>
+          <p class="desc">Funciona como uma obra, porém sem orçamento. Recebe transferências de materiais e equipamentos de qualquer obra e também pode realizar compras próprias. Dado da empresa, compartilhado entre todas as obras.</p>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">itens</span>Itens no depósito</h2>
+          </div>
+          <p class="desc">Materiais e equipamentos disponíveis no depósito (comprados diretamente + recebidos por transferência de obras), descontado o que já foi usado ou transferido para uma obra.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblDeposito">
+            <thead><tr>
+              <th style="min-width:180px;">Material/Equipamento</th>
+              <th style="width:110px;">Tipo</th>
+              <th style="width:80px;">Unid.</th>
+              <th style="width:100px;" class="num">Recebido</th>
+              <th style="width:100px;" class="num">Saído</th>
+              <th style="width:100px;" class="num">Saldo</th>
+              <th style="width:210px;"></th>
+            </tr></thead>
+            <tbody id="tbodyDeposito"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyDeposito" style="display:none;padding:20px;">Nenhum item no depósito ainda — receba uma transferência de alguma obra ou registre uma compra abaixo.</div>
+          <div id="depositoMovList" style="margin-top:14px;"></div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">compras</span>Compras/custo do depósito</h2>
+            <button class="btn small primary" id="btnAddDepositoCompra">+ Adicionar compra</button>
+          </div>
+          <div class="stats" id="depositoCustosStatsStrip"></div>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblDepositoCustos">
+            <thead><tr>
+              <th style="width:120px;">Tipo</th>
+              <th style="width:120px;">Data</th>
+              <th style="min-width:130px;">Loja / nome</th>
+              <th style="width:100px;">Nº nota/PIX</th>
+              <th style="width:150px;">Forma pagto.</th>
+              <th style="width:60px;">Parc.</th>
+              <th style="width:110px;">Banco</th>
+              <th style="min-width:150px;">Descrição</th>
+              <th style="width:80px;" class="num">Quant.</th>
+              <th style="width:80px;">Unid.</th>
+              <th style="width:90px;" class="num">R$/unid</th>
+              <th style="width:110px;" class="num">Valor total</th>
+              <th style="width:150px;">Entrega</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyDepositoCustos"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyDepositoCustos" style="display:none;padding:20px;">Nenhuma compra lançada ainda.</div>
+        </div>
+        <div class="card">
+          <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
+          <p class="desc">Soma dos valores lançados por tipo (Mão de obra, Material, Equipamento, Extra), cruzando com o mês do lançamento. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoDepositoCustos">
+            <thead><tr id="theadResumoDepositoCustos"></tr></thead>
+            <tbody id="tbodyResumoDepositoCustos"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyResumoDepositoCustos" style="display:none;padding:20px;">Lance custos para ver o resumo por mês.</div>
         </div>
       </div>
 
@@ -1068,6 +1157,22 @@ tr[draggable="true"]{cursor:default;}
           <div style="position:relative;height:280px;margin-top:16px;">
             <canvas id="chartConsolidacaoObras"></canvas>
           </div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
+            <select class="btn small" id="finResumoSelect" style="min-width:220px;">
+              <option value="__todas__">Todas as obras (consolidado)</option>
+              <option value="__escritorio__">Escritório</option>
+              <option value="__deposito__">Depósito</option>
+            </select>
+          </div>
+          <p class="desc">Soma dos gastos por tipo (Mão de obra, Material, Equipamento, Extra), cruzando com o mês do lançamento. Escolha ver o consolidado de todas as obras ou uma obra/Escritório/Depósito específico. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoFinanceiro">
+            <thead><tr id="theadResumoFinanceiro"></tr></thead>
+            <tbody id="tbodyResumoFinanceiro"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyResumoFinanceiro" style="display:none;padding:20px;">Sem gastos lançados ainda.</div>
         </div>
         <div class="card">
           <h2><span class="tag">todas as obras</span>Compras consolidadas</h2>
@@ -1172,16 +1277,13 @@ tr[draggable="true"]{cursor:default;}
           <p class="desc">Cadastro de funcionários da construtora (obra e escritório). Dado da empresa, compartilhado entre todas as obras. Clique no nome de um funcionário para ver/editar o cadastro completo.</p>
         </div>
         <div class="card">
-          <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
-            <div style="flex:1;min-width:300px;">
+          <div class="two-col">
+            <div>
               <h2 style="margin-bottom:4px;"><span class="tag">salários</span>Salários por função</h2>
               <p class="desc">Defina o valor salarial de cada função. O salário do funcionário é sempre puxado desta tabela.</p>
-              <div class="tbl-wrap"><table class="qtbl zebra" id="tblSalariosFuncao">
-                <thead><tr><th style="min-width:180px;">Função</th><th style="width:130px;" class="num">Salário (R$)</th></tr></thead>
-                <tbody id="tbodySalariosFuncao"></tbody>
-              </table></div>
+              <button class="btn primary" id="btnOpenSalarios">Ver/editar salários por função</button>
             </div>
-            <div style="flex:1;min-width:300px;">
+            <div>
               <h2 style="margin-bottom:4px;"><span class="tag">efetivo</span>Efetivo por obra</h2>
               <p class="desc">Quantidade de funcionários por função, em cada obra ativa.</p>
               <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEfetivoObra">

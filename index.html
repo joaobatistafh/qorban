@@ -204,7 +204,12 @@ input[type=number].cell::-webkit-inner-spin-button{opacity:0.5;}
 .stat .val .pct{font-size:13px;color:var(--text-dim);font-weight:500;margin-left:4px;}
 .stat.accent .val{color:var(--accent);}
 
-.gantt-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-inset);}
+.gantt-wrap{overflow:hidden;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg-inset);}
+.gantt-flex{display:flex;align-items:flex-start;}
+.gantt-fixed{flex:0 0 auto;background:var(--bg-inset);border-right:1px solid var(--line);}
+.gantt-fixed-row{display:flex;border-bottom:1px solid var(--line-soft);align-items:center;}
+.gantt-fixed-row:hover{background:rgba(255,255,255,0.03);}
+.gantt-scroll{flex:1;overflow-x:auto;min-width:0;}
 .gantt-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;}
 .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;}
 .legend .li{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-faint);}
@@ -293,6 +298,9 @@ table.qtbl th, table.qtbl td{white-space:nowrap;}
 .tr-orc-subitem td:nth-child(2){font-family:var(--mono);color:var(--text-faint);font-size:11px;}
 .tr-orc-subitem.indent td:nth-child(2){padding-left:18px;}
 #tblOrcamento thead th{white-space:normal;line-height:1.25;}
+.tbl-wrap.tbl-wrap-orc{max-height:72vh;overflow-y:auto;}
+#tblOrcamento thead tr:nth-child(1) th{position:sticky;top:0;z-index:6;height:30px;}
+#tblOrcamento thead tr:nth-child(2) th{position:sticky;top:30px;z-index:5;background:var(--bg-inset);}
 #tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
 #tblOrcamento input[type=number].cell{-moz-appearance:textfield;}
 #tblOrcamento input[type=number].cell::-webkit-inner-spin-button,
@@ -303,6 +311,9 @@ input.nospin::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
 tr.drag-over td{border-top:2px solid var(--accent) !important;}
 tr[draggable="true"]{cursor:default;}
 .orc-actions{display:flex;gap:2px;align-items:center;}
+.orc-actions-spacer{flex:1;}
+.icon-btn.add-accent{color:var(--accent);}
+.icon-btn.add-accent:hover{background:var(--accent-glow);}
 .gantt-item-row{cursor:pointer;}
 .gantt-item-row:hover{background:rgba(255,255,255,0.03);}
 </style>
@@ -369,7 +380,7 @@ tr[draggable="true"]{cursor:default;}
               <button class="btn primary small" id="btnAddOrcItem">+ Adicionar linha</button>
             </div>
           </div>
-          <div class="tbl-wrap" style="overflow-x:auto;">
+          <div class="tbl-wrap tbl-wrap-orc" style="overflow-x:auto;">
             <table id="tblOrcamento">
               <thead>
                 <tr>
@@ -387,19 +398,19 @@ tr[draggable="true"]{cursor:default;}
                   <th style="min-width:220px;">Discriminação do evento</th>
                   <th style="width:80px;" class="num">Quant.</th>
                   <th style="width:60px;">Unid.</th>
-                  <th style="width:150px;">SINAPI</th>
+                  <th style="width:150px;">Composição/<br>Sinapi</th>
                   <th style="width:90px;" class="num">MDO (R$)</th>
-                  <th style="width:90px;" class="num">Taxa extra MDO (R$)</th>
+                  <th style="width:90px;" class="num">Taxa extra<br>MDO (R$)</th>
                   <th style="width:90px;" class="num">MAT (R$)</th>
-                  <th style="width:90px;" class="num">Taxa extra MAT (R$)</th>
+                  <th style="width:90px;" class="num">Taxa extra<br>MAT (R$)</th>
                   <th style="width:90px;" class="num">EQUIP (R$)</th>
-                  <th style="width:80px;" class="num">Taxa extra EQUIP (%)</th>
-                  <th style="width:100px;" class="num">Tot. sem BDI/unid.</th>
-                  <th style="width:100px;" class="num">Tot. MDO sem BDI</th>
-                  <th style="width:100px;" class="num">Tot. MAT sem BDI</th>
-                  <th style="width:100px;" class="num">Tot. EQUIP sem BDI</th>
-                  <th style="width:100px;" class="num">Total sem BDI</th>
-                  <th style="width:100px;" class="num">Valor unit.</th>
+                  <th style="width:80px;" class="num">Taxa extra<br>EQUIP (%)</th>
+                  <th style="width:100px;" class="num">Total unid.<br>(sem BDI)</th>
+                  <th style="width:100px;" class="num">Total MDO<br>(sem BDI)</th>
+                  <th style="width:100px;" class="num">Total MAT<br>(sem BDI)</th>
+                  <th style="width:100px;" class="num">Total EQUIP<br>(sem BDI)</th>
+                  <th style="width:100px;" class="num">Total<br>(sem BDI)</th>
+                  <th style="width:100px;" class="num">Valor<br>unitário</th>
                   <th style="width:100px;" class="num">Valor total</th>
                 </tr>
               </thead>
@@ -456,7 +467,9 @@ tr[draggable="true"]{cursor:default;}
           <p class="desc">Barras proporcionais aos dias de calendário; dias não úteis (fins de semana e feriados) aparecem hachurados.</p>
           <div class="gantt-toolbar">
             <div class="legend">
-              <span class="li"><span class="sw" style="background:var(--accent)"></span> Atividade</span>
+              <span class="li"><span class="sw" style="background:#8a94a1"></span> Pendente</span>
+              <span class="li"><span class="sw" style="background:#5b9dd9"></span> Em andamento</span>
+              <span class="li"><span class="sw" style="background:var(--green)"></span> Concluída</span>
               <span class="li"><span class="sw" style="background:var(--red)"></span> Atraso vs. hoje</span>
               <span class="li"><span class="sw" style="background:repeating-linear-gradient(45deg,#333 0,#333 3px,#222 3px,#222 6px)"></span> Não útil / feriado</span>
             </div>

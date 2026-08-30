@@ -17,6 +17,7 @@ let fluxoCharts = {mdo:null, mat:null, outros:null};
 let fluxoPeriod = 'quinzena';
 let ganttLevel = 'subitem';
 let pendingFocusId = null;
+let lastFocusedOrcRowId = null;
 let dragBlockIds = null;
 let fluxoView = 'chart';
 
@@ -494,7 +495,9 @@ async function addOrcRowGlobal(){
   const level = await showModal('Nova linha do orçamento', NIVEL_MODAL_MSG, NIVEL_MODAL_BUTTONS);
   if(!level) return;
   const row = newOrcRow(level);
-  orcamento.push(row);
+  const idx = lastFocusedOrcRowId!=null ? orcamento.findIndex(r=>r.id===lastFocusedOrcRowId) : -1;
+  if(idx!==-1) orcamento.splice(idx+1, 0, row);
+  else orcamento.push(row);
   pendingFocusId = row.id;
   recalcAll();
 }
@@ -706,7 +709,8 @@ function orcRowHtml(r){
       <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
       <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
       <td class="orc-actions">
-        <button class="icon-btn add" data-orcadd="${r.id}" title="Adicionar linha neste item">+</button>
+        <button class="icon-btn add-accent" data-orcadd="${r.id}" title="Adicionar linha neste item">+</button>
+        <span class="orc-actions-spacer"></span>
         <button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button>
       </td>
     </tr>`;
@@ -719,18 +723,22 @@ function orcRowHtml(r){
       <td class="num" style="font-family:var(--mono)">R$ ${fmtNum(r.valorTotal,2)}</td>
       <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
       <td class="orc-actions">
+        <button class="icon-btn add-accent" data-orcadd="${r.id}" title="Adicionar linha neste subitem principal">+</button>
+        <span class="orc-actions-spacer"></span>
         <button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button>
       </td>
     </tr>`;
   }
   const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
+  const codeInt = parseInt(r.sinapiCode,10);
+  const verComposicaoBtn = (r.sinapiCode && DB.items[codeInt]) ? `<button class="icon-btn" data-vercomposicao="${r.id}" title="Ver composição completa">©</button>` : '';
   return `<tr class="tr-orc-subitem${r.underPrincipal?' indent':''}" data-orc="${r.id}" draggable="true">
     <td><button class="icon-btn drag" title="Arrastar para reordenar">⠿</button></td>
     <td>${r.numero}</td>
     <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
     <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
     <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
-    <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${semPrecoBadge}</td>
+    <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${verComposicaoBtn} ${semPrecoBadge}</td>
     <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
     <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
     <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
@@ -745,7 +753,7 @@ function orcRowHtml(r){
     <td class="num" style="font-family:var(--mono)">${fmtNum(r.valorUnit,2)}</td>
     <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(r.valorTotal,2)}</td>
     <td class="num" style="font-family:var(--mono)">${fmtNum(r.incidencia,1)}%</td>
-    <td class="orc-actions"><button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button></td>
+    <td class="orc-actions"><span class="orc-actions-spacer"></span><button class="icon-btn" data-orcremove="${r.id}" title="Remover">✕</button></td>
   </tr>`;
 }
 
@@ -766,7 +774,60 @@ function renderOrcamento(){
   }
 }
 
+/* Popup com o detalhamento completo (insumos/mão de obra/equip.) de uma composição SINAPI */
+function composicaoDetalheHtml(code){
+  const codeInt = parseInt(code,10);
+  const item = DB.items[codeInt];
+  if(!item) return '<p>Composição não encontrada.</p>';
+  const b = computeUnitBreakdown(codeInt);
+  function section(title, bucket){
+    const codes = Object.keys(bucket);
+    if(!codes.length) return '';
+    const rows = codes.map(c=>{
+      const it = bucket[c];
+      const preco = priceOf(c);
+      const total = preco===null ? null : preco*it.qty;
+      return `<tr><td class="code">${c}</td><td>${escapeXml(it.desc)}</td><td>${escapeXml(it.unit)}</td><td class="num" style="font-family:var(--mono)">${fmtNum(it.qty,4)}</td><td class="num" style="font-family:var(--mono)">${preco===null?'—':fmtNum(preco,2)}</td><td class="num" style="font-family:var(--mono)">${total===null?'—':fmtNum(total,2)}</td></tr>`;
+    }).join('');
+    return `<h4 class="sechead">${title}</h4><div class="tbl-wrap" style="margin-bottom:14px;max-height:none;"><table class="qtbl zebra"><thead><tr><th style="width:90px;">Código</th><th>Descrição</th><th style="width:60px;">Unid.</th><th style="width:90px;" class="num">Coef.</th><th style="width:90px;" class="num">Preço unit.</th><th style="width:100px;" class="num">Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  const pb = priceBreakdownUnit(codeInt);
+  const totalUnit = pb.mdo+pb.mat+pb.equip;
+  return `
+    <h3>${codeInt} — ${escapeXml(item[0])}</h3>
+    <p class="desc">Unidade: ${escapeXml(item[1]||'—')}${pb.semPreco?' · <span style="color:var(--accent)">alguns insumos sem preço cadastrado</span>':''}</p>
+    ${section('Mão de obra', b.roles)}
+    ${section('Materiais', b.materials)}
+    ${section('Equipamentos', b.equip)}
+    <div class="stats" style="margin-top:6px;">
+      <div class="stat"><div class="lbl">MDO/unid.</div><div class="val">R$ ${fmtNum(pb.mdo,2)}</div></div>
+      <div class="stat"><div class="lbl">MAT/unid.</div><div class="val">R$ ${fmtNum(pb.mat,2)}</div></div>
+      <div class="stat"><div class="lbl">EQUIP/unid.</div><div class="val">R$ ${fmtNum(pb.equip,2)}</div></div>
+      <div class="stat accent"><div class="lbl">Total/unid. (sem BDI)</div><div class="val">R$ ${fmtNum(totalUnit,2)}</div></div>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="compModalCloseBtn">Fechar</button></div>
+  `;
+}
+function openComposicaoModal(code){
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  box.classList.add('wide');
+  box.innerHTML = composicaoDetalheHtml(code);
+  overlay.style.display = 'flex';
+  function close(){ overlay.style.display='none'; box.classList.remove('wide'); box.innerHTML=''; }
+  document.getElementById('compModalCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
+}
 function bindOrcamentoEvents(){
+  document.querySelectorAll('#tblOrcamento input[data-orcf], #tblOrcamento select[data-orcf]').forEach(el=>{
+    el.addEventListener('focus', ()=>{ lastFocusedOrcRowId = +el.dataset.orc; });
+  });
+  document.querySelectorAll('[data-vercomposicao]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const row = orcamento.find(r=>r.id==btn.dataset.vercomposicao);
+      if(row && row.sinapiCode) openComposicaoModal(row.sinapiCode);
+    });
+  });
   document.querySelectorAll('#tblOrcamento input[data-orcf]').forEach(inp=>{
     if(inp.dataset.orcf==='sinapiCode'){
       setupCodeSearch(inp, ()=>{
@@ -1117,55 +1178,126 @@ function renderStats(){
   `;
 }
 
-function ganttSvgFor(rows, todayLine){
+/* Cabeçalho (faixa de meses + régua de segundas-feiras) + barras da linha do tempo.
+   Devolve apenas o SVG da área rolável — a coluna fixa (descrição/status/datas) é
+   renderizada à parte em HTML normal, fora da área de scroll horizontal. */
+function ganttTimelineSvg(rows, todayLine){
   const minStart = new Date(Math.min(...rows.map(r=>r.start)));
   const maxEnd = new Date(Math.max(...rows.map(r=>r.end)));
   const totalDays = Math.max(1, Math.round((maxEnd-minStart)/86400000)+1);
   const dayW = totalDays>90 ? 8 : totalDays>45 ? 14 : 24;
   const rowH = 26;
-  const labelW = 280;
+  const headerH = 40;
   const chartW = totalDays*dayW;
-  const chartH = rows.length*rowH + 30;
+  const chartH = headerH + rows.length*rowH;
   const today = new Date(); today.setHours(0,0,0,0);
+  const MONTH_BG = ['#1b2733','#212c38'];
 
-  let svg = `<svg width="${labelW+chartW}" height="${chartH}" style="display:block;font-family:var(--mono);">`;
-  for(let i=0;i<totalDays;i++){
+  let svg = `<svg width="${chartW}" height="${chartH}" style="display:block;font-family:var(--mono);">`;
+  svg += `<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#1a1f26"/><line x1="0" y1="0" x2="0" y2="6" stroke="#2b333e" stroke-width="3"/></pattern></defs>`;
+
+  /* linha 1: faixas por mês (com destaque no mês atual) */
+  let i=0, mi=0;
+  while(i<totalDays){
     const d = addDays(minStart,i);
-    const x = labelW + i*dayW;
-    if(!isWorkday(d)) svg += `<rect x="${x}" y="0" width="${dayW}" height="${chartH}" fill="url(#hatch)" opacity="0.5"/>`;
-    if(d.getDate()===1){
-      svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#333c47" stroke-width="1"/>`;
-      svg += `<text x="${x+3}" y="12" fill="#8a94a1" font-size="9">${d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'})}</text>`;
+    let j=i;
+    while(j<totalDays){
+      const dd = addDays(minStart,j);
+      if(dd.getMonth()!==d.getMonth() || dd.getFullYear()!==d.getFullYear()) break;
+      j++;
+    }
+    const x = i*dayW, w=(j-i)*dayW;
+    const isCurrentMonth = today.getFullYear()===d.getFullYear() && today.getMonth()===d.getMonth();
+    svg += `<rect x="${x}" y="0" width="${w}" height="20" fill="${MONTH_BG[mi%2]}" stroke="${isCurrentMonth?'#6fbf8b':'none'}" stroke-width="${isCurrentMonth?'1.5':'0'}"/>`;
+    if(w>36) svg += `<text x="${x+w/2}" y="14" fill="#c7cdd4" font-size="9.5" font-family="Inter, sans-serif" font-weight="700" text-anchor="middle" letter-spacing="0.06em">${d.toLocaleDateString('pt-BR',{month:'long'}).toUpperCase()} ${String(d.getFullYear()).slice(2)}</text>`;
+    i=j; mi++;
+  }
+  /* linha 2: régua de segundas-feiras (dia da semana indicado pela data da segunda) */
+  svg += `<rect x="0" y="20" width="${chartW}" height="20" fill="var(--bg-inset)"/>`;
+  for(let k=0;k<totalDays;k++){
+    const d = addDays(minStart,k);
+    const x = k*dayW;
+    if(!isWorkday(d)) svg += `<rect x="${x}" y="${headerH}" width="${dayW}" height="${rows.length*rowH}" fill="url(#hatch)" opacity="0.5"/>`;
+    if(d.getDay()===1){
+      svg += `<line x1="${x}" y1="20" x2="${x}" y2="${chartH}" stroke="#333c47" stroke-width="1"/>`;
+      svg += `<text x="${x+3}" y="34" fill="#8a94a1" font-size="9">${d.getDate()}</text>`;
     }
   }
-  svg += `<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="#1a1f26"/><line x1="0" y1="0" x2="0" y2="6" stroke="#2b333e" stroke-width="3"/></pattern></defs>`;
   if(todayLine && today>=minStart && today<=maxEnd){
-    const x = labelW + Math.round((today-minStart)/86400000)*dayW;
+    const x = Math.round((today-minStart)/86400000)*dayW;
     svg += `<line x1="${x}" y1="0" x2="${x}" y2="${chartH}" stroke="#d9695b" stroke-width="1.5" stroke-dasharray="3,2"/>`;
   }
-  rows.forEach((row,i)=>{
-    const y = 30 + i*rowH;
-    const x = labelW + Math.round((row.start-minStart)/86400000)*dayW;
+  rows.forEach((row,idx)=>{
+    const y = headerH + idx*rowH;
+    const x = Math.round((row.start-minStart)/86400000)*dayW;
     const w = Math.max(dayW*0.6, Math.round((row.end-row.start)/86400000+1)*dayW - 2);
-    const barColor = row.isItem ? '#e8a33d' : (row.end<today ? 'var(--red)' : '#5b9dd9');
-    const labelIndent = row.indent ? 16 : 0;
+    let barColor;
+    if(row.isItem) barColor = '#e8a33d';
+    else if(row.status==='Concluída') barColor = 'var(--green)';
+    else if(row.end<today) barColor = 'var(--red)';
+    else if(row.status==='Em andamento') barColor = '#5b9dd9';
+    else barColor = '#8a94a1';
     const cursorAttr = row.clickable ? ` style="cursor:pointer;" data-toggle-item="${row.toggleId}"` : '';
-    svg += `<g${cursorAttr}><rect x="0" y="${y}" width="${labelW+chartW}" height="${rowH}" fill="transparent"/>
-      <text x="${8+labelIndent}" y="${y+15}" fill="${row.isItem?'#e7ebef':'#c7cdd4'}" font-size="11" font-family="Inter, sans-serif" font-weight="${row.isItem?600:400}">${row.clickable?(row.expanded?'▾ ':'▸ '):''}${escapeXml(row.label)}</text>
-      <rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${barColor}" opacity="0.9"><title>${escapeXml(row.label+' · '+fmtDate(row.start)+' a '+fmtDate(row.end))}</title></rect>
+    svg += `<g${cursorAttr}><rect x="0" y="${y}" width="${chartW}" height="${rowH}" fill="transparent"/>
+      <rect x="${x}" y="${y+4}" width="${w}" height="14" rx="2" fill="${barColor}" opacity="0.9"><title>${escapeXml(row.label+' · '+fmtDate(row.start)+' a '+fmtDate(row.end)+(row.isItem?'':' · '+(row.status||'Pendente')))}</title></rect>
     </g>`;
   });
   svg += `</svg>`;
-  return svg;
+  return {svg, headerH, rowH};
 }
-
-function renderGantt(){
+function ganttStatusBadgeClass(status){
+  if(status==='Concluída') return 'ok';
+  if(status==='Em andamento') return 'warn';
+  return '';
+}
+function ganttFixedColsHtml(rows, headerH, rowH){
+  const colDefs = [
+    {w:260, label:'Atividade'}, {w:118, label:'Status'}, {w:74, label:'Início'}, {w:74, label:'Fim'}, {w:66, label:'Duração'},
+  ];
+  const header = `<div style="display:flex;background:var(--bg-inset);border-bottom:1px solid var(--line);">
+    ${colDefs.map(c=>`<div style="width:${c.w}px;flex:0 0 ${c.w}px;padding:0 8px;display:flex;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;height:${headerH}px;">${c.label}</div>`).join('')}
+  </div>`;
+  const body = rows.map(row=>{
+    const labelIndent = row.indent ? 16 : 0;
+    const cursorAttr = row.clickable ? ` style="cursor:pointer;height:${rowH}px;"` : ` style="height:${rowH}px;"`;
+    const statusLabel = row.isItem ? '' : (row.status || 'Pendente');
+    return `<div class="gantt-fixed-row"${row.clickable?` data-toggle-item="${row.toggleId}"`:''}${cursorAttr}>
+      <div style="width:${colDefs[0].w}px;flex:0 0 ${colDefs[0].w}px;padding:0 8px 0 ${8+labelIndent}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:${row.isItem?'#e7ebef':'#c7cdd4'};font-weight:${row.isItem?600:400};">${row.clickable?(row.expanded?'▾ ':'▸ '):''}${escapeXml(row.label)}</div>
+      <div style="width:${colDefs[1].w}px;flex:0 0 ${colDefs[1].w}px;padding:0 8px;">${statusLabel?`<span class="badge ${ganttStatusBadgeClass(statusLabel)}" style="font-size:9.5px;">${escapeXml(statusLabel)}</span>`:''}</div>
+      <div style="width:${colDefs[2].w}px;flex:0 0 ${colDefs[2].w}px;padding:0 8px;font-family:var(--mono);font-size:10.5px;color:var(--text-dim);">${fmtDate(row.start)}</div>
+      <div style="width:${colDefs[3].w}px;flex:0 0 ${colDefs[3].w}px;padding:0 8px;font-family:var(--mono);font-size:10.5px;color:var(--text-dim);">${fmtDate(row.end)}</div>
+      <div style="width:${colDefs[4].w}px;flex:0 0 ${colDefs[4].w}px;padding:0 8px;font-family:var(--mono);font-size:10.5px;color:var(--text-dim);">${row.durationDays?row.durationDays+'d':'—'}</div>
+    </div>`;
+  }).join('');
+  return header+body;
+}
+function renderGanttRows(rows){
   const wrap = document.getElementById('ganttWrap');
+  if(rows.length===0){ wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
+  const {svg, headerH, rowH} = ganttTimelineSvg(rows, true);
+  const fixedHtml = ganttFixedColsHtml(rows, headerH, rowH);
+  wrap.innerHTML = `<div class="gantt-flex">
+    <div class="gantt-fixed">${fixedHtml}</div>
+    <div class="gantt-scroll">${svg}</div>
+  </div>`;
+  wrap.querySelectorAll('[data-toggle-item]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = +el.dataset.toggleItem;
+      const item = orcamento.find(r=>r.id===id);
+      if(item) item.ganttExpanded = !item.ganttExpanded;
+      renderGantt();
+    });
+  });
+}
+function renderGantt(){
   if(ganttLevel==='subitem'){
     const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.end);
-    if(subitens.length===0){ wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
-    const rows = subitens.map(act=>({start:act.start, end:act.end, label:`${act.seq}. ${truncate(act.nome||act.sinapiCode||'—',34)}`, isItem:false}));
-    wrap.innerHTML = ganttSvgFor(rows, true);
+    if(subitens.length===0){ document.getElementById('ganttWrap').innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
+    const rows = subitens.map(act=>({
+      start:act.start, end:act.end, label:`${act.seq}. ${truncate(act.nome||act.sinapiCode||'—',34)}`,
+      isItem:false, status: subitemLatestStatus(act.id) || 'Pendente', durationDays: act.durationDays,
+    }));
+    renderGanttRows(rows);
     return;
   }
   // nível item: agrupa por item, com expand/collapse
@@ -1181,23 +1313,15 @@ function renderGantt(){
     if(scheduled.length===0) return;
     const start = new Date(Math.min(...scheduled.map(c=>c.start)));
     const end = new Date(Math.max(...scheduled.map(c=>c.end)));
-    rows.push({start, end, label:`${g.item.numero} ${truncate(g.item.nome,32)}`, isItem:true, clickable:true, toggleId:g.item.id, expanded:!!g.item.ganttExpanded});
+    const durationDays = Math.round((end-start)/86400000)+1;
+    rows.push({start, end, label:`${g.item.numero} ${truncate(g.item.nome,32)}`, isItem:true, clickable:true, toggleId:g.item.id, expanded:!!g.item.ganttExpanded, durationDays});
     if(g.item.ganttExpanded){
       scheduled.forEach(c=>{
-        rows.push({start:c.start, end:c.end, label:`${c.seq}. ${truncate(c.nome||c.sinapiCode||'—',30)}`, isItem:false, indent:true});
+        rows.push({start:c.start, end:c.end, label:`${c.seq}. ${truncate(c.nome||c.sinapiCode||'—',30)}`, isItem:false, indent:true, status: subitemLatestStatus(c.id) || 'Pendente', durationDays: c.durationDays});
       });
     }
   });
-  if(rows.length===0){ wrap.innerHTML = '<div class="empty-state">Adicione subitens no Orçamento para visualizar o cronograma.</div>'; return; }
-  wrap.innerHTML = ganttSvgFor(rows, true);
-  wrap.querySelectorAll('[data-toggle-item]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = +el.dataset.toggleItem;
-      const item = orcamento.find(r=>r.id===id);
-      if(item) item.ganttExpanded = !item.ganttExpanded;
-      renderGantt();
-    });
-  });
+  renderGanttRows(rows);
 }
 
 function setupGanttToggle(){

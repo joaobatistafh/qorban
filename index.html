@@ -301,6 +301,10 @@ table.qtbl th, table.qtbl td{white-space:nowrap;}
 .tbl-wrap.tbl-wrap-orc{max-height:72vh;overflow-y:auto;}
 #tblOrcamento thead tr:nth-child(1) th{position:sticky;top:0;z-index:6;height:30px;}
 #tblOrcamento thead tr:nth-child(2) th{position:sticky;top:30px;z-index:5;background:var(--bg-inset);}
+.filter-row th{padding:4px 6px;}
+.filter-row .cell.small{width:100%;padding:3px 6px;font-size:10.5px;}
+#tblExtSistema thead tr:nth-child(1) th{position:sticky;top:0;z-index:6;height:30px;}
+#tblExtSistema thead tr:nth-child(2) th{position:sticky;top:30px;z-index:5;background:var(--bg-inset);}
 #tblOrcamento input.cell{font-size:11.5px;padding:4px 5px;}
 #tblOrcamento input[type=number].cell{-moz-appearance:textfield;}
 #tblOrcamento input[type=number].cell::-webkit-inner-spin-button,
@@ -351,11 +355,11 @@ tr[draggable="true"]{cursor:default;}
       <div class="navsep"></div>
       <button class="navbtn" data-tab="consolidacao"><span class="ico">14</span> Financeiro</button>
       <button class="navbtn" data-tab="escritorio"><span class="ico">15</span> Escritório</button>
-      <button class="navbtn" data-tab="deposito"><span class="ico">15b</span> Depósito</button>
-      <button class="navbtn" data-tab="funcionarios"><span class="ico">16</span> Funcionários</button>
-      <button class="navbtn" data-tab="patrimonio"><span class="ico">17</span> Patrimônio</button>
+      <button class="navbtn" data-tab="deposito"><span class="ico">16</span> Depósito</button>
+      <button class="navbtn" data-tab="funcionarios"><span class="ico">17</span> Funcionários</button>
+      <button class="navbtn" data-tab="patrimonio"><span class="ico">18</span> Patrimônio</button>
       <div class="navsep"></div>
-      <button class="navbtn" data-tab="acessos"><span class="ico">18</span> Acessos</button>
+      <button class="navbtn" data-tab="acessos"><span class="ico">19</span> Acessos</button>
       <button class="navbtn" data-tab="configuracao"><span class="ico">⚙</span> Configuração</button>
     </nav>
   </div>
@@ -991,43 +995,44 @@ tr[draggable="true"]{cursor:default;}
           <h2><span class="tag">empresa</span>Escritório</h2>
           <p class="desc">Custos fixos e variáveis do escritório central (água, energia, internet, aluguel etc). Estes dados são <b>da empresa</b>, não de uma obra específica, e ficam disponíveis em qualquer projeto que você abrir.</p>
         </div>
-        <datalist id="escDescList"></datalist>
-        <div class="two-col">
-          <div class="card" style="margin:0;">
-            <div class="toolbar-row">
-              <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
-              <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
-            </div>
-            <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem como sugestão de autocompletar no campo "Descrição" da tabela de custos.</p>
-            <div id="escDescricoesChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">custos</span>Custo do escritório</h2>
+            <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
           </div>
-          <div class="card" style="margin:0;flex:2;min-width:520px;">
-            <div class="toolbar-row">
-              <h2 style="margin:0;"><span class="tag">custos</span>Custo do escritório</h2>
-              <button class="btn small primary" id="btnAddEscCusto">+ Adicionar custo</button>
-            </div>
-            <div class="stats" id="escCustosStatsStrip"></div>
-            <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
-              <thead><tr>
-                <th style="width:120px;">Tipo</th>
-                <th style="width:120px;">Data</th>
-                <th style="min-width:130px;">Loja / nome</th>
-                <th style="width:100px;">Nº nota/PIX</th>
-                <th style="width:150px;">Forma pagto.</th>
-                <th style="width:60px;">Parc.</th>
-                <th style="width:110px;">Banco</th>
-                <th style="min-width:150px;">Descrição</th>
-                <th style="width:80px;" class="num">Quant.</th>
-                <th style="width:80px;">Unid.</th>
-                <th style="width:90px;" class="num">R$/unid</th>
-                <th style="width:110px;" class="num">Valor total</th>
-                <th style="width:150px;">Entrega</th>
-                <th style="width:34px;"></th>
-              </tr></thead>
-              <tbody id="tbodyEscCustos"></tbody>
-            </table></div>
-            <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
+          <div class="stats" id="escCustosStatsStrip"></div>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
+            <thead><tr>
+              <th style="width:120px;">Tipo</th>
+              <th style="width:120px;">Data</th>
+              <th style="min-width:130px;">Loja / nome</th>
+              <th style="width:100px;">Nº nota/PIX</th>
+              <th style="width:150px;">Forma pagto.</th>
+              <th style="width:60px;">Parc.</th>
+              <th style="width:110px;">Banco</th>
+              <th style="min-width:170px;">Descrição</th>
+              <th style="width:80px;" class="num">Quant.</th>
+              <th style="width:80px;">Unid.</th>
+              <th style="width:90px;" class="num">R$/unid</th>
+              <th style="width:110px;" class="num">Valor total</th>
+              <th style="width:150px;">Entrega</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="tbodyEscCustos"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
+        </div>
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
+            <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
           </div>
+          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem na lista suspensa "Descrição" da tabela de custos acima.</p>
+          <div class="tbl-wrap"><table class="qtbl zebra" id="tblEscDescricoes">
+            <thead><tr><th>Descrição</th><th style="width:34px;"></th></tr></thead>
+            <tbody id="tbodyEscDescricoes"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyEscDescricoes" style="display:none;padding:16px;">Nenhum item cadastrado ainda.</div>
         </div>
         <div class="card">
           <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
@@ -1202,6 +1207,48 @@ tr[draggable="true"]{cursor:default;}
           <div class="empty-state" id="emptyComprasConsolidadas" style="display:none;padding:20px;">Nenhuma compra encontrada ainda. Clique em "Atualizar" acima.</div>
         </div>
         <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">sistema</span>Extrato do sistema</h2>
+          </div>
+          <p class="desc">Todas as entradas (recebimentos) e saídas (compras) de todas as obras, do Escritório e do Depósito, em ordem cronológica. Compras parceladas aparecem uma linha por parcela (ex.: "Cartão de crédito (1/3)"). Clique numa linha para ver todos os dados do lançamento.</p>
+          <div class="toolbar-row" style="gap:14px;">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="btn small" data-extperiod="semana">Semanal</button>
+              <button class="btn small" data-extperiod="quinzena">Quinzenal</button>
+              <button class="btn small" data-extperiod="mes">Mês</button>
+              <button class="btn small" data-extperiod="personalizado">Personalizado</button>
+            </div>
+            <div id="extSistCustomRange" style="display:none;gap:6px;align-items:center;">
+              <input type="date" class="cell" id="extSistDataIni" style="width:140px;">
+              <span class="hint">até</span>
+              <input type="date" class="cell" id="extSistDataFim" style="width:140px;">
+            </div>
+          </div>
+          <div class="stats" id="extSistStatsStrip"></div>
+          <div class="tbl-wrap tbl-wrap-ext" style="overflow-x:auto;max-height:60vh;overflow-y:auto;"><table class="qtbl zebra" id="tblExtSistema">
+            <thead>
+              <tr>
+                <th style="width:100px;">Data</th>
+                <th style="min-width:150px;">Loja/Nome</th>
+                <th style="width:110px;">Tipo</th>
+                <th style="width:170px;">Forma de pagamento</th>
+                <th style="width:120px;" class="num">Valor (R$)</th>
+                <th style="width:110px;">Banco</th>
+              </tr>
+              <tr class="filter-row">
+                <th></th>
+                <th><input type="text" class="cell small" id="extFiltroLoja" placeholder="filtrar…"></th>
+                <th><select class="cell small" id="extFiltroTipo"><option value="">todos</option></select></th>
+                <th><select class="cell small" id="extFiltroForma"><option value="">todas</option></select></th>
+                <th></th>
+                <th><select class="cell small" id="extFiltroBanco"><option value="">todos</option></select></th>
+              </tr>
+            </thead>
+            <tbody id="tbodyExtSistema"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyExtSistema" style="display:none;padding:20px;">Nenhum lançamento no período selecionado. Clique em "Atualizar dados de todas as obras" no topo da página.</div>
+        </div>
+        <div class="card">
           <h2><span class="tag">conta</span>Expectativa de saldo em conta</h2>
           <p class="desc">Recebimentos e saídas (compras de obras + custos do escritório + aquisições de patrimônio) de todo o sistema, em ordem cronológica.</p>
           <div style="position:relative;height:260px;">
@@ -1253,7 +1300,7 @@ tr[draggable="true"]{cursor:default;}
           <h2><span class="tag">permissões</span>Matriz de acesso por página</h2>
           <p class="desc">Marque as páginas que cada funcionário pode acessar.</p>
           <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblPermissoes">
-            <thead><tr id="theadPermissoes"></tr></thead>
+            <thead><tr id="theadPermissoesTop"></tr><tr id="theadPermissoesSub"></tr></thead>
             <tbody id="tbodyPermissoes"></tbody>
           </table></div>
           <div class="empty-state" id="emptyPermissoes" style="display:none;padding:20px;">Cadastre um funcionário para configurar as permissões.</div>
@@ -1368,7 +1415,39 @@ tr[draggable="true"]{cursor:default;}
                 <option value="Reforma">Reforma</option>
               </select>
             </div>
+            <div class="field-row">
+              <label>Status da obra</label>
+              <select id="cfgStatus" class="cell">
+                <option value="Ativa">Ativa</option>
+                <option value="Finalizada">Finalizada</option>
+              </select>
+            </div>
+            <div class="field-row" id="cfgDataFimRow" style="display:none;">
+              <label>Data fim</label>
+              <input type="date" id="cfgDataFim" class="cell">
+            </div>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">empresa</span>Todas as obras do sistema</h2>
+            <button class="btn small" id="btnRefreshTodasObras">↻ Atualizar</button>
+          </div>
+          <p class="desc">Status, tipo/subtipo, datas e valor de orçamento de todas as obras cadastradas. Marque uma obra como "Finalizada" para registrar a data de encerramento.</p>
+          <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblTodasObras">
+            <thead><tr>
+              <th style="min-width:170px;">Obra</th>
+              <th style="width:130px;">Status</th>
+              <th style="width:120px;">Tipo</th>
+              <th style="width:120px;">Subtipo</th>
+              <th style="width:100px;">Data início</th>
+              <th style="width:130px;">Data fim</th>
+              <th style="width:130px;" class="num">Valor do orçamento</th>
+            </tr></thead>
+            <tbody id="tbodyTodasObras"></tbody>
+          </table></div>
+          <div class="empty-state" id="emptyTodasObras" style="display:none;padding:20px;">Carregando obras…</div>
         </div>
 
         <div class="card-row2">

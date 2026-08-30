@@ -1644,6 +1644,8 @@ function collectConfig(){
     endereco: document.getElementById('cfgEndereco').value,
     tipo: document.getElementById('cfgTipo').value,
     subtipo: document.getElementById('cfgSubtipo').value,
+    status: document.getElementById('cfgStatus').value,
+    dataFim: document.getElementById('cfgDataFim').value || '',
   };
 }
 function applyConfig(cfg){
@@ -1657,15 +1659,92 @@ function applyConfig(cfg){
   document.getElementById('cfgEndereco').value = cfg.endereco || '';
   document.getElementById('cfgTipo').value = cfg.tipo || 'Residencial';
   document.getElementById('cfgSubtipo').value = cfg.subtipo || 'Construção';
+  document.getElementById('cfgStatus').value = cfg.status || 'Ativa';
+  document.getElementById('cfgDataFim').value = cfg.dataFim || '';
+  document.getElementById('cfgDataFimRow').style.display = (cfg.status==='Finalizada') ? '' : 'none';
 }
 function setupConfigTab(){
-  ['cfgNome','cfgCliente','cfgTelefone','cfgEmail','cfgEndereco','cfgTipo','cfgSubtipo'].forEach(id=>{
+  ['cfgNome','cfgCliente','cfgTelefone','cfgEmail','cfgEndereco','cfgTipo','cfgSubtipo','cfgDataFim'].forEach(id=>{
     document.getElementById(id).addEventListener('change', ()=>{
       if(id==='cfgNome') refreshProjectSelect();
       saveProject();
     });
   });
+  document.getElementById('cfgStatus').addEventListener('change', (e)=>{
+    const fimRow = document.getElementById('cfgDataFimRow');
+    if(e.target.value==='Finalizada'){
+      fimRow.style.display = '';
+      if(!document.getElementById('cfgDataFim').value) document.getElementById('cfgDataFim').value = toISO(new Date());
+    } else {
+      fimRow.style.display = 'none';
+      document.getElementById('cfgDataFim').value = '';
+    }
+    saveProject();
+    renderTodasObras();
+  });
   document.getElementById('btnDeleteProject').addEventListener('click', deleteCurrentProject);
+  document.getElementById('btnRefreshTodasObras').addEventListener('click', renderTodasObras);
+}
+/* --- Todas as obras do sistema (Configuração) --- */
+async function atualizarConfigObra(obraId, patchFn){
+  const rows = await supaRequest(`projetos?id=eq.${obraId}&select=id,nome,dados`, {method:'GET'});
+  const dados = (rows && rows[0] && rows[0].dados) || {};
+  dados.config = dados.config || {};
+  patchFn(dados.config);
+  await supaRequest('projetos', {method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify({id:obraId, dados, atualizado_em:new Date().toISOString()})});
+}
+async function renderTodasObras(){
+  const tbody = document.getElementById('tbodyTodasObras');
+  const emptyEl = document.getElementById('emptyTodasObras');
+  if(!tbody) return;
+  emptyEl.style.display = 'block'; emptyEl.textContent = 'Carregando obras…';
+  let rows;
+  try{ rows = await supaListProjectsFull(); }catch(e){ console.error(e); emptyEl.textContent = 'Não foi possível carregar as obras.'; return; }
+  if(!rows || !rows.length){ tbody.innerHTML=''; emptyEl.textContent = 'Nenhuma obra cadastrada ainda.'; return; }
+  emptyEl.style.display = 'none';
+  tbody.innerHTML = rows.map(row=>{
+    const d = row.dados || {};
+    const cfg = d.config || {};
+    const orcamentoObra = d.orcamento || [];
+    const bdiMul = 1 + ((d.bdiPercent||0)/100);
+    const subitensObra = orcamentoObra.filter(r=>r.level==='subitem');
+    const totalOrcado = subitensObra.reduce((s,r)=>s+((r.totalMdoSemBdi||0)+(r.totalMatSemBdi||0)+(r.totalEquipSemBdi||0)),0)*bdiMul;
+    const dataInicio = d.calendar?.start || '';
+    const status = cfg.status || 'Ativa';
+    return `<tr data-obraRow="${row.id}">
+      <td>${escapeXml(cfg.nome || row.nome || 'Obra sem nome')}</td>
+      <td><select class="cell" data-toRow="status" data-obraid="${row.id}">
+        <option value="Ativa" ${status==='Ativa'?'selected':''}>Ativa</option>
+        <option value="Finalizada" ${status==='Finalizada'?'selected':''}>Finalizada</option>
+      </select></td>
+      <td>${escapeXml(cfg.tipo||'—')}</td>
+      <td>${escapeXml(cfg.subtipo||'—')}</td>
+      <td style="font-family:var(--mono);">${dataInicio ? fmtDate(parseISO(dataInicio)) : '—'}</td>
+      <td>${status==='Finalizada' ? `<input type="date" class="cell" data-toRow="dataFim" data-obraid="${row.id}" value="${cfg.dataFim||''}">` : '<span class="hint">—</span>'}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">R$ ${fmtNum(totalOrcado,2)}</td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('[data-toRow="status"]').forEach(el=>{
+    el.addEventListener('change', async ()=>{
+      const obraId = el.dataset.obraid;
+      const novoStatus = el.value;
+      const dataFim = novoStatus==='Finalizada' ? toISO(new Date()) : '';
+      await atualizarConfigObra(obraId, (cfg)=>{ cfg.status = novoStatus; cfg.dataFim = dataFim; });
+      if(obraId===currentProjectId){ applyConfig(collectConfigMerged({status:novoStatus, dataFim})); saveProject(); }
+      renderTodasObras();
+    });
+  });
+  tbody.querySelectorAll('[data-toRow="dataFim"]').forEach(el=>{
+    el.addEventListener('change', async ()=>{
+      const obraId = el.dataset.obraid;
+      await atualizarConfigObra(obraId, (cfg)=>{ cfg.dataFim = el.value; });
+      if(obraId===currentProjectId){ document.getElementById('cfgDataFim').value = el.value; saveProject(); }
+    });
+  });
+}
+function collectConfigMerged(patch){
+  const cfg = collectConfig();
+  return Object.assign(cfg, patch);
 }
 
 /* ============================================================
@@ -3310,7 +3389,7 @@ async function doSaveSistemaGlobal(){
 }
 function seedColaboradorPadrao(){
   if(sistemaGlobal.colaboradores.length) return;
-  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]=true);
+  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]={ver:true,editar:true});
   sistemaGlobal.colaboradores.push({
     id: nextColaboradorId++, nome:'João Rios', data:'2026-01-28', funcao:'Sócio-administrador',
     email:'joaobatistafh@gmail.com', senha:'joao', senhaTemporaria:true, permissoes: perms
@@ -3360,16 +3439,16 @@ function renderEmpresaAll(){
 }
 
 /* --- Escritório --- */
-function escDescricaoChipHtml(d){
-  return `<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(d.nome)}<button class="icon-btn" style="padding:0;" data-escdescremove="${d.id}" title="Remover">✕</button></span>`;
+function escDescricaoRowHtml(d){
+  return `<tr data-escdescrow="${d.id}"><td>${escapeXml(d.nome)}</td><td><button class="icon-btn" data-escdescremove="${d.id}" title="Remover">✕</button></td></tr>`;
 }
 function renderEscDescricoes(){
-  const wrap = document.getElementById('escDescricoesChips');
-  const datalist = document.getElementById('escDescList');
-  if(datalist) datalist.innerHTML = sistemaGlobal.escritorioDescricoes.map(d=>`<option value="${escapeAttr(d.nome)}">`).join('');
-  if(!wrap) return;
-  wrap.innerHTML = sistemaGlobal.escritorioDescricoes.length ? sistemaGlobal.escritorioDescricoes.map(escDescricaoChipHtml).join('') : '<span class="hint">Nenhuma descrição cadastrada ainda.</span>';
-  wrap.querySelectorAll('[data-escdescremove]').forEach(btn=>{
+  const tbody = document.getElementById('tbodyEscDescricoes');
+  const emptyEl = document.getElementById('emptyEscDescricoes');
+  if(emptyEl) emptyEl.style.display = sistemaGlobal.escritorioDescricoes.length ? 'none' : 'block';
+  if(!tbody) return;
+  tbody.innerHTML = sistemaGlobal.escritorioDescricoes.map(escDescricaoRowHtml).join('');
+  tbody.querySelectorAll('[data-escdescremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       sistemaGlobal.escritorioDescricoes = sistemaGlobal.escritorioDescricoes.filter(d=>String(d.id)!==btn.dataset.escdescremove);
       renderEscDescricoes(); renderEscCustos(); saveSistemaGlobal();
@@ -3382,13 +3461,21 @@ function addEscDescricao(){
   sistemaGlobal.escritorioDescricoes.push({id: nextEscDescricaoId++, nome});
   renderEscDescricoes(); renderEscCustos(); saveSistemaGlobal();
 }
-function escDescOptionsHtml(selected){
-  return `<option value="">—</option>` + sistemaGlobal.escritorioDescricoes.map(d=>`<option ${d.nome===selected?'selected':''}>${escapeXml(d.nome)}</option>`).join('');
+/* Lista suspensa da Descrição, ligada ao catálogo "Itens cadastrados" */
+function escDescSelectOptionsHtml(selected){
+  const opts = sistemaGlobal.escritorioDescricoes.map(d=>d.nome);
+  let extra = '';
+  if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
+  return `<option value="">—</option>` + opts.map(o=>`<option ${o===selected?'selected':''}>${escapeXml(o)}</option>`).join('') + extra + `<option value="__add_desc__">+ Adicionar novo…</option>`;
 }
 /* Linha de custo no formato "compra" (Tipo, Data, Loja, Nº nota/PIX, Forma pagto., Parc.,
-   Banco, Descrição, Quant., Unid., R$/unid, Valor total, Entrega) — usado em Escritório e Depósito. */
-function custoCompraRowHtml(c, prefix){
+   Banco, Descrição, Quant., Unid., R$/unid, Valor total, Entrega) — usado em Escritório e Depósito.
+   useDescCatalog=true liga a Descrição ao catálogo de itens cadastrados (só no Escritório). */
+function custoCompraRowHtml(c, prefix, useDescCatalog){
   const showParc = c.formaPagto==='Cartão de crédito';
+  const descCell = useDescCatalog
+    ? `<select class="cell" data-cxf="descricao" data-${prefix}="${c.id}">${escDescSelectOptionsHtml(c.descricao)}</select>`
+    : `<input type="text" class="cell" data-cxf="descricao" data-${prefix}="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição">`;
   return `<tr data-${prefix}="${c.id}">
     <td><select class="cell" data-cxf="tipo" data-${prefix}="${c.id}">${TIPOS_COMPRA.map(t=>`<option ${t===c.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
     <td><input type="date" class="cell" data-cxf="data" data-${prefix}="${c.id}" value="${c.data||''}"></td>
@@ -3397,7 +3484,7 @@ function custoCompraRowHtml(c, prefix){
     <td><select class="cell" data-cxf="formaPagto" data-${prefix}="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
     <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cxf="parcelas" data-${prefix}="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
     <td><select class="cell" data-cxf="banco" data-${prefix}="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
-    <td><input type="text" class="cell" list="escDescList" data-cxf="descricao" data-${prefix}="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição"></td>
+    <td>${descCell}</td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cxf="quantidade" data-${prefix}="${c.id}" value="${fmtInput(c.quantidade)}"></td>
     <td><select class="cell" style="width:78px;" data-cxf="unidade" data-${prefix}="${c.id}">
       <option value="">—</option>
@@ -3436,6 +3523,19 @@ function bindCustoCompraEvents(tbodyId, prefix, list, onChange, onRemove){
       const c = list.find(x=>String(x.id)===el.dataset[prefix]);
       if(!c) return;
       const f = el.dataset.cxf;
+      if(f==='descricao' && el.value==='__add_desc__'){
+        const novo = (prompt('Nome do novo item (ex: Água, Energia, Internet):')||'').trim();
+        if(novo){
+          sistemaGlobal.escritorioDescricoes = sistemaGlobal.escritorioDescricoes || [];
+          if(!sistemaGlobal.escritorioDescricoes.some(d=>d.nome===novo)) sistemaGlobal.escritorioDescricoes.push({id: nextEscDescricaoId++, nome:novo});
+          c.descricao = novo;
+        } else {
+          el.value = c.descricao || '';
+          return;
+        }
+        onChange('descricao_catalog_added');
+        return;
+      }
       if(f==='quantidade' || f==='valorUnid'){
         c[f] = parseFloat(el.value)||0;
         c.valorTotal = round2((c.quantidade||0)*(c.valorUnid||0));
@@ -3458,9 +3558,10 @@ function renderEscCustos(){
   if(!tbody) return;
   const emptyEl = document.getElementById('emptyEscCustos');
   if(emptyEl) emptyEl.style.display = sistemaGlobal.escritorioCustos.length ? 'none':'block';
-  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(c=>custoCompraRowHtml(c,'esccusto')).join('');
+  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(c=>custoCompraRowHtml(c,'esccusto',true)).join('');
   bindCustoCompraEvents('tbodyEscCustos', 'esccusto', sistemaGlobal.escritorioCustos, (f)=>{
     saveSistemaGlobal();
+    if(f==='descricao_catalog_added'){ renderEscDescricoes(); renderEscCustos(); return; }
     if(f==='formaPagto' || f==='entrega'){ renderEscCustos(); return; }
     renderEscCustosStats();
     renderResumoEscCustos();
@@ -3793,28 +3894,50 @@ function renderColaboradores(){
 function addColaborador(){
   const nome = (prompt('Nome do funcionário:')||'').trim();
   if(!nome) return;
-  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]=false);
+  const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]={ver:false,editar:false});
   sistemaGlobal.colaboradores.push({id: nextColaboradorId++, nome, data: toISO(new Date()), funcao:'Estagiário', email:'', senha: gerarSenhaPadrao(nome), senhaTemporaria:true, permissoes: perms});
   renderColaboradores(); saveSistemaGlobal();
 }
+/* Migra o modelo antigo (booleano) de permissões para {ver, editar} */
+function normalizePermissoes(c){
+  if(!c.permissoes) c.permissoes = {};
+  SYSTEM_PAGES.forEach(p=>{
+    const cur = c.permissoes[p.id];
+    if(cur===true) c.permissoes[p.id] = {ver:true, editar:true};
+    else if(cur===false || cur===undefined || cur===null) c.permissoes[p.id] = cur && typeof cur==='object' ? cur : {ver:false, editar:false};
+    else if(typeof cur!=='object') c.permissoes[p.id] = {ver:false, editar:false};
+  });
+}
 function renderPermissoes(){
-  const thead = document.getElementById('theadPermissoes');
+  const theadTop = document.getElementById('theadPermissoesTop');
+  const theadSub = document.getElementById('theadPermissoesSub');
   const tbody = document.getElementById('tbodyPermissoes');
   const emptyEl = document.getElementById('emptyPermissoes');
-  if(!thead || !tbody) return;
+  if(!theadTop || !theadSub || !tbody) return;
   if(emptyEl) emptyEl.style.display = sistemaGlobal.colaboradores.length ? 'none':'block';
-  thead.innerHTML = `<th style="min-width:140px;">Funcionário</th>` + SYSTEM_PAGES.map(p=>`<th style="width:66px;text-align:center;font-size:9.5px;">${p.label}</th>`).join('');
+  theadTop.innerHTML = `<th rowspan="2" style="min-width:160px;">Funcionário</th>` + SYSTEM_PAGES.map(p=>`<th colspan="2" style="text-align:center;font-size:9.5px;">${p.label}</th>`).join('');
+  theadSub.innerHTML = SYSTEM_PAGES.map(()=>`<th style="width:38px;text-align:center;font-size:9px;color:var(--text-faint);">Ver</th><th style="width:38px;text-align:center;font-size:9px;color:var(--text-faint);">Edit.</th>`).join('');
   tbody.innerHTML = sistemaGlobal.colaboradores.map(c=>{
-    if(!c.permissoes) c.permissoes = {};
-    return `<tr><td>${escapeXml(c.nome)}</td>` + SYSTEM_PAGES.map(p=>`<td style="text-align:center;"><input type="checkbox" data-permcolab="${c.id}" data-permpage="${p.id}" ${c.permissoes[p.id]?'checked':''}></td>`).join('') + `</tr>`;
+    normalizePermissoes(c);
+    const nomeCell = `<td>${escapeXml(c.nome)} <span class="hint">— ${escapeXml(c.funcao||'')}</span></td>`;
+    const cells = SYSTEM_PAGES.map(p=>{
+      const pv = c.permissoes[p.id];
+      return `<td style="text-align:center;"><input type="checkbox" data-permcolab="${c.id}" data-permpage="${p.id}" data-permkind="ver" ${pv.ver?'checked':''}></td>`
+           + `<td style="text-align:center;"><input type="checkbox" data-permcolab="${c.id}" data-permpage="${p.id}" data-permkind="editar" ${pv.editar?'checked':''}></td>`;
+    }).join('');
+    return `<tr>${nomeCell}${cells}</tr>`;
   }).join('');
   tbody.querySelectorAll('[data-permcolab]').forEach(el=>{
     el.addEventListener('change', ()=>{
       const c = sistemaGlobal.colaboradores.find(x=>String(x.id)===el.dataset.permcolab);
       if(!c) return;
-      if(!c.permissoes) c.permissoes = {};
-      c.permissoes[el.dataset.permpage] = el.checked;
+      normalizePermissoes(c);
+      const pv = c.permissoes[el.dataset.permpage];
+      pv[el.dataset.permkind] = el.checked;
+      if(el.dataset.permkind==='editar' && el.checked) pv.ver = true; // editar implica ver
+      if(el.dataset.permkind==='ver' && !el.checked) pv.editar = false; // sem ver não pode editar
       saveSistemaGlobal();
+      renderPermissoes();
     });
   });
 }
@@ -4177,8 +4300,10 @@ async function refreshConsolidacao(){
   try{
     const rows = await supaListProjectsFull();
     consolidacaoObras = (rows||[]).map(computeObraKpis);
+    buildExtratoSistema(rows||[]);
     await refreshObrasCache();
     renderConsolidacao();
+    renderExtratoSistema();
     try{ renderFuncionarios(); }catch(e){}
     try{ renderPatrimonio(); }catch(e){}
     showToast('Dados de todas as obras atualizados.');
@@ -4186,6 +4311,181 @@ async function refreshConsolidacao(){
     console.error(e);
     showToast('Não consegui buscar as obras agora (verifique a conexão).');
   }
+}
+/* --- Extrato do sistema: entradas + saídas de todas as obras/escritório/depósito, em ordem cronológica --- */
+let extSistLinhas = [];
+let extSistPeriod = 'mes';
+let extSistCustomStart = '';
+let extSistCustomEnd = '';
+function buildExtratoSistema(obrasRows){
+  const linhas = [];
+  (obrasRows||[]).forEach(row=>{
+    const d = row.dados || {};
+    const obraNome = d.config?.nome || row.nome || 'Obra sem nome';
+    (d.recebimentos||[]).forEach(r=>{
+      if(!r.data) return;
+      linhas.push({data:r.data, loja:'Recebimento', tipo:'Entrada', formaPagto:r.formaPagto||'', valor:(r.valor||0), banco:'', origem:obraNome, kind:'recebimento', raw:r});
+    });
+    (d.compras||[]).forEach(c=>{
+      if(!c.data) return;
+      expandParcelasEventos(c).forEach(ev=>{
+        linhas.push({data:ev.data, loja:c.loja||'(sem loja)', tipo:c.tipo||'Extra', formaPagto:(c.formaPagto||'')+(ev.parcela?` (${ev.parcela})`:''), valor:-ev.valor, banco:c.banco||'', origem:obraNome, kind:'compra', raw:c});
+      });
+    });
+  });
+  [{lista:sistemaGlobal.escritorioCustos||[], origem:'Escritório'}, {lista:sistemaGlobal.deposito?.compras||[], origem:'Depósito'}].forEach(grp=>{
+    grp.lista.forEach(c=>{
+      if(!c.data) return;
+      expandParcelasEventos(c).forEach(ev=>{
+        linhas.push({data:ev.data, loja:c.loja||'(sem loja)', tipo:c.tipo||'Extra', formaPagto:(c.formaPagto||'')+(ev.parcela?` (${ev.parcela})`:''), valor:-ev.valor, banco:c.banco||'', origem:grp.origem, kind:'compra', raw:c});
+      });
+    });
+  });
+  linhas.sort((a,b)=>a.data.localeCompare(b.data));
+  extSistLinhas = linhas;
+  populateExtSistFilterOptions();
+}
+function populateExtSistFilterOptions(){
+  const tipos = [...new Set(extSistLinhas.map(l=>l.tipo))].sort();
+  const formas = [...new Set(extSistLinhas.map(l=>(l.formaPagto||'').replace(/\s*\(\d+\/\d+\)$/,'')))].filter(Boolean).sort();
+  const bancos = [...new Set(extSistLinhas.map(l=>l.banco).filter(Boolean))].sort();
+  const selTipo = document.getElementById('extFiltroTipo');
+  const selForma = document.getElementById('extFiltroForma');
+  const selBanco = document.getElementById('extFiltroBanco');
+  if(selTipo){ const v=selTipo.value; selTipo.innerHTML = `<option value="">todos</option>` + tipos.map(t=>`<option>${escapeXml(t)}</option>`).join(''); selTipo.value = v; }
+  if(selForma){ const v=selForma.value; selForma.innerHTML = `<option value="">todas</option>` + formas.map(f=>`<option>${escapeXml(f)}</option>`).join(''); selForma.value = v; }
+  if(selBanco){ const v=selBanco.value; selBanco.innerHTML = `<option value="">todos</option>` + bancos.map(b=>`<option>${escapeXml(b)}</option>`).join(''); selBanco.value = v; }
+}
+function extSistPeriodRange(){
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  if(extSistPeriod==='semana'){
+    const dow = (hoje.getDay()+6)%7;
+    const start = addDays(hoje, -dow);
+    const end = addDays(start, 6);
+    return {start: toISO(start), end: toISO(end)};
+  }
+  if(extSistPeriod==='quinzena'){
+    const day = hoje.getDate();
+    const start = new Date(hoje.getFullYear(), hoje.getMonth(), day<=15?1:16);
+    const endDay = day<=15?15:new Date(hoje.getFullYear(),hoje.getMonth()+1,0).getDate();
+    const end = new Date(hoje.getFullYear(), hoje.getMonth(), endDay);
+    return {start: toISO(start), end: toISO(end)};
+  }
+  if(extSistPeriod==='mes'){
+    const start = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const end = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0);
+    return {start: toISO(start), end: toISO(end)};
+  }
+  return {start: extSistCustomStart||'0000-01-01', end: extSistCustomEnd||'9999-12-31'};
+}
+let extSistRowRefs = {};
+function renderExtratoSistema(){
+  const tbody = document.getElementById('tbodyExtSistema');
+  if(!tbody) return;
+  const {start, end} = extSistPeriodRange();
+  const filtroLoja = (document.getElementById('extFiltroLoja')?.value||'').toLowerCase();
+  const filtroTipo = document.getElementById('extFiltroTipo')?.value||'';
+  const filtroForma = document.getElementById('extFiltroForma')?.value||'';
+  const filtroBanco = document.getElementById('extFiltroBanco')?.value||'';
+  const filtradas = extSistLinhas.filter(l=>{
+    if(l.data<start || l.data>end) return false;
+    if(filtroLoja && !(l.loja||'').toLowerCase().includes(filtroLoja)) return false;
+    if(filtroTipo && l.tipo!==filtroTipo) return false;
+    if(filtroForma && !(l.formaPagto||'').startsWith(filtroForma)) return false;
+    if(filtroBanco && l.banco!==filtroBanco) return false;
+    return true;
+  });
+  const emptyEl = document.getElementById('emptyExtSistema');
+  if(emptyEl) emptyEl.style.display = filtradas.length ? 'none' : 'block';
+  extSistRowRefs = {};
+  tbody.innerHTML = filtradas.map((l,idx)=>{
+    extSistRowRefs[idx] = l;
+    return `<tr data-extrow="${idx}" style="cursor:pointer;">
+      <td style="font-family:var(--mono)">${fmtDate(parseISO(l.data))}</td>
+      <td>${escapeXml(l.loja)}</td>
+      <td>${escapeXml(l.tipo)}</td>
+      <td>${escapeXml(l.formaPagto)}</td>
+      <td class="num" style="font-family:var(--mono);color:${l.valor<0?'var(--red)':'var(--green)'}">${l.valor<0?'-':'+'} R$ ${fmtNum(Math.abs(l.valor),2)}</td>
+      <td>${escapeXml(l.banco||'—')}</td>
+    </tr>`;
+  }).join('');
+  const totalEntradas = filtradas.filter(l=>l.valor>0).reduce((s,l)=>s+l.valor,0);
+  const totalSaidas = filtradas.filter(l=>l.valor<0).reduce((s,l)=>s+Math.abs(l.valor),0);
+  const strip = document.getElementById('extSistStatsStrip');
+  if(strip) strip.innerHTML = `
+    <div class="stat"><div class="lbl">Entradas no período</div><div class="val">R$ ${fmtNum(totalEntradas,2)}</div></div>
+    <div class="stat"><div class="lbl">Saídas no período</div><div class="val">R$ ${fmtNum(totalSaidas,2)}</div></div>
+    <div class="stat accent"><div class="lbl">Saldo do período</div><div class="val" style="font-size:17px;">R$ ${fmtNum(totalEntradas-totalSaidas,2)}</div></div>
+    <div class="stat"><div class="lbl">Lançamentos</div><div class="val">${filtradas.length}</div></div>
+  `;
+  tbody.querySelectorAll('[data-extrow]').forEach(tr=>{
+    tr.addEventListener('click', ()=> openExtratoLinhaModal(extSistRowRefs[tr.dataset.extrow]));
+  });
+}
+function extratoLinhaModalHtml(l){
+  if(l.kind==='recebimento'){
+    const r = l.raw;
+    return `<h3>Recebimento — ${escapeXml(l.origem)}</h3>
+      <div class="config-grid">
+        <div class="field-row"><label>Data</label><span>${fmtDate(parseISO(r.data))}</span></div>
+        <div class="field-row"><label>Valor</label><span>R$ ${fmtNum(r.valor,2)}</span></div>
+        <div class="field-row"><label>Forma de pagamento</label><span>${escapeXml(r.formaPagto||'—')}</span></div>
+        <div class="field-row"><label>Obra</label><span>${escapeXml(l.origem)}</span></div>
+      </div>
+      <div class="modal-actions"><button class="btn primary" id="extModalCloseBtn">Fechar</button></div>`;
+  }
+  const c = l.raw;
+  return `<h3>Compra — ${escapeXml(c.descricao||c.loja||'—')}</h3>
+    <div class="config-grid">
+      <div class="field-row"><label>Origem</label><span>${escapeXml(l.origem)}</span></div>
+      <div class="field-row"><label>Tipo</label><span>${escapeXml(c.tipo||'—')}</span></div>
+      <div class="field-row"><label>Data</label><span>${fmtDate(parseISO(c.data))}</span></div>
+      <div class="field-row"><label>Loja/nome</label><span>${escapeXml(c.loja||'—')}</span></div>
+      <div class="field-row"><label>Nº nota/PIX</label><span>${escapeXml(c.notaNum||'—')}</span></div>
+      <div class="field-row"><label>Forma de pagamento</label><span>${escapeXml(c.formaPagto||'—')}${c.parcelas>1?` (${c.parcelas}x)`:''}</span></div>
+      <div class="field-row"><label>Banco</label><span>${escapeXml(c.banco||'—')}</span></div>
+      <div class="field-row"><label>Descrição</label><span>${escapeXml(c.descricao||'—')}</span></div>
+      <div class="field-row"><label>Quantidade</label><span>${fmtNum(c.quantidade,2)} ${escapeXml(c.unidade||'')}</span></div>
+      <div class="field-row"><label>R$/unid.</label><span>R$ ${fmtNum(c.valorUnid,2)}</span></div>
+      <div class="field-row"><label>Valor total</label><span>R$ ${fmtNum(c.valorTotal,2)}</span></div>
+      <div class="field-row"><label>Entrega</label><span>${escapeXml(c.entrega||'—')}${c.dataEntregaPrevista?' — '+fmtDate(parseISO(c.dataEntregaPrevista)):''}</span></div>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="extModalCloseBtn">Fechar</button></div>`;
+}
+function openExtratoLinhaModal(l){
+  if(!l) return;
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  box.classList.add('wide');
+  box.innerHTML = extratoLinhaModalHtml(l);
+  overlay.style.display = 'flex';
+  function close(){ overlay.style.display='none'; box.classList.remove('wide'); box.innerHTML=''; }
+  document.getElementById('extModalCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
+}
+function setupExtratoSistemaTab(){
+  document.querySelectorAll('[data-extperiod]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      extSistPeriod = btn.dataset.extperiod;
+      document.querySelectorAll('[data-extperiod]').forEach(b=>b.classList.toggle('primary', b===btn));
+      document.getElementById('extSistCustomRange').style.display = extSistPeriod==='personalizado' ? 'flex' : 'none';
+      renderExtratoSistema();
+    });
+  });
+  const mesBtn = document.querySelector('[data-extperiod="mes"]');
+  if(mesBtn) mesBtn.classList.add('primary');
+  ['extSistDataIni','extSistDataFim'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('change', ()=>{
+      extSistCustomStart = document.getElementById('extSistDataIni').value;
+      extSistCustomEnd = document.getElementById('extSistDataFim').value;
+      renderExtratoSistema();
+    });
+  });
+  ['extFiltroLoja','extFiltroTipo','extFiltroForma','extFiltroBanco'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.addEventListener('input', renderExtratoSistema);
+  });
 }
 function renderConsolidacao(){
   renderBancosChips();
@@ -4391,6 +4691,7 @@ function setupConsolidacaoTab(){
       comprasFinResumoSelecionadas()
     );
   });
+  setupExtratoSistemaTab();
 }
 
 /* ============================================================
@@ -4605,6 +4906,7 @@ function setupTabs(){
       if(btn.dataset.tab==='consolidacao') setTimeout(renderConsolidacao, 30);
       if(btn.dataset.tab==='deposito') setTimeout(renderDeposito, 30);
       if(btn.dataset.tab==='funcionarios') setTimeout(renderFuncionarios, 30);
+      if(btn.dataset.tab==='configuracao') setTimeout(renderTodasObras, 30);
       document.getElementById('sidebar').classList.remove('open');
     });
   });

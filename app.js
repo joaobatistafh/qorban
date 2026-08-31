@@ -141,35 +141,40 @@ function expandParcelasEventos(c){
   }
   return eventos;
 }
-/* Resumo genérico "gastos por Tipo × Mês" (Mão de obra / Material / Equipamento / Extra),
-   reaproveitado em Escritório, Depósito, Fluxo de caixa e Financeiro.
-   items: array de {tipo, data, valorTotal|valor, formaPagto, parcelas} */
-function computeResumoGastosPorTipo(items){
+/* Resumo genérico "gastos × Mês", reaproveitado em Escritório (por Descrição), Depósito,
+   Fluxo de caixa e Financeiro (por Tipo: Mão de obra / Material / Equipamento / Extra).
+   items: array de {tipo, descricao, data, valorTotal|valor, formaPagto, parcelas} */
+function computeResumoGastosGenerico(items, groupBy){
+  const keyFn = groupBy==='descricao' ? (c=>(c.descricao||'').trim()||'(sem descrição)') : (c=>c.tipo||'Extra');
   const eventos = [];
   (items||[]).forEach(c=>{
     if(!c.data) return;
-    expandParcelasEventos(c).forEach(ev=>{ eventos.push({tipo: c.tipo||'Extra', mes: ev.data.slice(0,7), valor: ev.valor}); });
+    const key = keyFn(c);
+    expandParcelasEventos(c).forEach(ev=>{ eventos.push({key, mes: ev.data.slice(0,7), valor: ev.valor}); });
   });
   const meses = [...new Set(eventos.map(e=>e.mes))].sort();
-  const linhas = TIPOS_COMPRA.map(tipo=>{
-    const valoresPorMes = meses.map(m=> round2(eventos.filter(e=>e.tipo===tipo && e.mes===m).reduce((s,e)=>s+e.valor,0)));
-    return {tipo, valoresPorMes, totalLinha: round2(valoresPorMes.reduce((s,v)=>s+v,0))};
+  const keys = groupBy==='descricao' ? [...new Set(eventos.map(e=>e.key))].sort((a,b)=>a.localeCompare(b,'pt-BR')) : TIPOS_COMPRA;
+  const linhas = keys.map(key=>{
+    const valoresPorMes = meses.map(m=> round2(eventos.filter(e=>e.key===key && e.mes===m).reduce((s,e)=>s+e.valor,0)));
+    return {key, valoresPorMes, totalLinha: round2(valoresPorMes.reduce((s,v)=>s+v,0))};
   });
   const totalGeralPorMes = meses.map((_,i)=> round2(linhas.reduce((s,l)=>s+l.valoresPorMes[i],0)));
   const totalGeral = round2(totalGeralPorMes.reduce((s,v)=>s+v,0));
   return {meses, linhas, totalGeralPorMes, totalGeral};
 }
-function renderResumoGastosTable(theadEl, tbodyEl, emptyEl, items){
+function renderResumoGastosTable(theadEl, tbodyEl, emptyEl, items, groupBy){
   if(!theadEl || !tbodyEl) return;
-  const r = computeResumoGastosPorTipo(items);
+  groupBy = groupBy || 'tipo';
+  const r = computeResumoGastosGenerico(items, groupBy);
   if(!r || !r.meses.length){
     if(emptyEl) emptyEl.style.display='block';
     theadEl.innerHTML=''; tbodyEl.innerHTML='';
     return;
   }
   if(emptyEl) emptyEl.style.display='none';
-  theadEl.innerHTML = `<th style="min-width:150px;">Tipo</th>` + r.meses.map(m=>`<th class="num" style="width:100px;">${fmtMesLabel(m)}</th>`).join('') + `<th class="num" style="width:110px;">Total</th>`;
-  tbodyEl.innerHTML = r.linhas.map(l=>`<tr><td>${escapeXml(l.tipo)}</td>${l.valoresPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${Math.abs(v)>0.0001?fmtNum(v,2):'—'}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);font-weight:600;">${fmtNum(l.totalLinha,2)}</td></tr>`).join('')
+  const colLabel = groupBy==='descricao' ? 'Descrição' : 'Tipo';
+  theadEl.innerHTML = `<th style="min-width:150px;">${colLabel}</th>` + r.meses.map(m=>`<th class="num" style="width:100px;">${fmtMesLabel(m)}</th>`).join('') + `<th class="num" style="width:110px;">Total</th>`;
+  tbodyEl.innerHTML = r.linhas.map(l=>`<tr><td>${escapeXml(l.key)}</td>${l.valoresPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${Math.abs(v)>0.0001?fmtNum(v,2):'—'}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);font-weight:600;">${fmtNum(l.totalLinha,2)}</td></tr>`).join('')
     + `<tr style="font-weight:600;background:var(--bg-inset);"><td>TOTAL</td>${r.totalGeralPorMes.map(v=>`<td class="num" style="font-family:var(--mono)">${fmtNum(v,2)}</td>`).join('')}<td class="num" style="font-family:var(--mono);color:var(--accent);">${fmtNum(r.totalGeral,2)}</td></tr>`;
 }
 
@@ -731,14 +736,14 @@ function orcRowHtml(r){
   }
   const semPrecoBadge = (r.sinapiCode && r.semPreco) ? '<span class="badge warn" title="Algum insumo dessa composição está sem preço cadastrado — soma parcial">parcial</span>' : '';
   const codeInt = parseInt(r.sinapiCode,10);
-  const verComposicaoBtn = (r.sinapiCode && DB.items[codeInt]) ? `<button class="icon-btn" data-vercomposicao="${r.id}" title="Ver composição completa">©</button>` : '';
+  const verComposicaoBtn = (r.sinapiCode && DB.items[codeInt]) ? `<button class="icon-btn" data-vercomposicao="${r.id}" title="Ver composição completa" style="flex:none;">ⓘ</button>` : '';
   return `<tr class="tr-orc-subitem${r.underPrincipal?' indent':''}" data-orc="${r.id}" draggable="true">
     <td><button class="icon-btn drag" title="Arrastar para reordenar">⠿</button></td>
     <td>${r.numero}</td>
     <td><input type="text" class="cell" data-orcf="nome" data-orc="${r.id}" value="${escapeAttr(r.nome)}"></td>
     <td class="num"><input type="number" class="cell small" style="width:60px;" data-orcf="quant" data-orc="${r.id}" value="${r.quant??''}" step="0.01"></td>
     <td><input type="text" class="cell" style="width:50px;" data-orcf="unidade" data-orc="${r.id}" value="${escapeAttr(r.unidade)}"></td>
-    <td><div class="code-search"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div> ${verComposicaoBtn} ${semPrecoBadge}</td>
+    <td><div style="display:flex;align-items:center;gap:4px;"><div class="code-search" style="flex:1;"><input type="text" class="cell mono" data-orcf="sinapiCode" data-orc="${r.id}" value="${r.sinapiCode||''}" placeholder="código ou descrição…" autocomplete="off"></div>${verComposicaoBtn}</div>${semPrecoBadge}</td>
     <td class="num"><input type="number" class="cell small" data-orcf="mdo" data-orc="${r.id}" value="${fmtInput(r.mdo)}" step="0.01" ${r.sinapiCode?'title="preenchido pelo SINAPI — edite se quiser sobrescrever"':''}></td>
     <td class="num"><input type="number" class="cell small" data-orcf="taxaMdo" data-orc="${r.id}" value="${fmtInput(r.taxaMdo)}" step="0.01"></td>
     <td class="num"><input type="number" class="cell small" data-orcf="mat" data-orc="${r.id}" value="${fmtInput(r.mat)}" step="0.01"></td>
@@ -1832,7 +1837,7 @@ function compraRowHtml(c){
     <td><input type="text" class="cell" data-cf="notaNum" data-compra="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
     <td><select class="cell" data-cf="formaPagto" data-compra="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
     <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cf="parcelas" data-compra="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
-    <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
+    <td><select class="cell" data-cf="banco" data-compra="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${contaBancariaLabel(b)===c.banco?'selected':''}>${escapeXml(contaBancariaLabel(b))}</option>`).join('')}</select></td>
     <td><input type="text" class="cell" data-cf="descricao" data-compra="${c.id}" value="${escapeAttr(c.descricao)}"></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="quantidade" data-compra="${c.id}" value="${fmtInput(c.quantidade)}"></td>
     <td><select class="cell" style="width:78px;" data-cf="unidade" data-compra="${c.id}">
@@ -1905,16 +1910,24 @@ function renderComprasStats(){
     `;
   }
 }
+/* Label de exibição de uma conta bancária cadastrada — usado nos selects "Banco" e nas chips. */
+function contaBancariaLabel(b){
+  if(!b) return '';
+  if(typeof b==='string') return b; // dados antigos (antes da migração) já vêm convertidos no load, mas por segurança
+  return `${b.nome} — ${b.banco}`;
+}
 function renderBancosChips(){
   const wrap = document.getElementById('bancosChips');
   if(!wrap) return;
   const lista = sistemaGlobal.bancos || [];
-  wrap.innerHTML = lista.length ? lista.map(b=>`<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(b)}<button class="icon-btn" style="padding:0;" data-bancoremove="${escapeAttr(b)}" title="Remover conta">✕</button></span>`).join('') : '<span class="hint">Nenhuma conta cadastrada ainda.</span>';
+  wrap.innerHTML = lista.length ? lista.map(b=>`<span class="badge ok" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;">${escapeXml(contaBancariaLabel(b))} <span class="hint" style="color:inherit;opacity:.75;">· saldo R$ ${fmtNum(b.saldoAtual,2)}</span><button class="icon-btn" style="padding:0;" data-bancoremove="${b.id}" title="Remover conta">✕</button></span>`).join('') : '<span class="hint">Nenhuma conta cadastrada ainda.</span>';
   wrap.querySelectorAll('[data-bancoremove]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      sistemaGlobal.bancos = (sistemaGlobal.bancos||[]).filter(b=>b!==btn.dataset.bancoremove);
+      sistemaGlobal.bancos = (sistemaGlobal.bancos||[]).filter(b=>String(b.id)!==btn.dataset.bancoremove);
       renderBancosChips();
       renderCompras();
+      renderEscCustos();
+      renderDepositoCustos();
       saveSistemaGlobal();
     });
   });
@@ -1936,14 +1949,57 @@ function addCompra(){
   renderFluxoCaixaAll();
   saveProject();
 }
+/* Popup de cadastro de conta bancária. O sistema monta seu próprio extrato (simulando um banco),
+   por isso pede o saldo atual, para facilitar achar divergências comparando os dois extratos. */
+function contaBancariaModalHtml(){
+  return `
+    <h3>Nova conta bancária</h3>
+    <p>O sistema vai realizar um extrato próprio, simulando um banco. Por isso, ele pede o saldo atual do seu banco, a fim de facilitar o encontro de divergências ao comparar os dois extratos.</p>
+    <div class="field-row"><label>Banco *</label><input type="text" class="cell" id="cbBanco" placeholder="ex: Banco do Brasil"></div>
+    <div class="field-row"><label>Agência *</label><input type="text" class="cell" id="cbAgencia"></div>
+    <div class="field-row"><label>Conta *</label><input type="text" class="cell" id="cbConta"></div>
+    <div class="field-row"><label>Operação</label><input type="text" class="cell" id="cbOperacao"></div>
+    <div class="field-row"><label>Nome *</label><input type="text" class="cell" id="cbNome" placeholder="ex: Conta PJ, Conta pessoal…"></div>
+    <div class="field-row"><label>Saldo atual (R$)</label><input type="number" step="0.01" class="cell" id="cbSaldo" value="0"></div>
+    <p class="modal-error" id="cbError">Preencha os campos obrigatórios (*): Banco, Agência, Conta e Nome.</p>
+    <div class="modal-actions">
+      <button class="btn" id="cbCancelBtn">Cancelar</button>
+      <button class="btn primary" id="cbSaveBtn">Salvar conta</button>
+    </div>
+  `;
+}
+function openContaBancariaModal(){
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  box.classList.remove('wide');
+  box.innerHTML = contaBancariaModalHtml();
+  overlay.style.display = 'flex';
+  function close(){ overlay.style.display='none'; box.innerHTML=''; }
+  document.getElementById('cbCancelBtn').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } }, {once:true});
+  document.getElementById('cbSaveBtn').addEventListener('click', ()=>{
+    const banco = document.getElementById('cbBanco').value.trim();
+    const agencia = document.getElementById('cbAgencia').value.trim();
+    const conta = document.getElementById('cbConta').value.trim();
+    const operacao = document.getElementById('cbOperacao').value.trim();
+    const nome = document.getElementById('cbNome').value.trim();
+    const saldoAtual = parseFloat(document.getElementById('cbSaldo').value)||0;
+    if(!banco || !agencia || !conta || !nome){
+      document.getElementById('cbError').style.display = 'block';
+      return;
+    }
+    sistemaGlobal.bancos = sistemaGlobal.bancos || [];
+    sistemaGlobal.bancos.push({id: nextBancoId++, banco, agencia, conta, operacao, nome, saldoAtual});
+    saveSistemaGlobal();
+    close();
+    renderBancosChips();
+    renderCompras();
+    renderEscCustos();
+    renderDepositoCustos();
+  });
+}
 function addBanco(){
-  const nome = (prompt('Nome da conta/banco:')||'').trim();
-  if(!nome) return;
-  sistemaGlobal.bancos = sistemaGlobal.bancos || [];
-  if(!sistemaGlobal.bancos.includes(nome)) sistemaGlobal.bancos.push(nome);
-  renderBancosChips();
-  renderCompras();
-  saveSistemaGlobal();
+  openContaBancariaModal();
 }
 function computeComprasPrevisaoRows(){
   const subitens = orcamento.filter(r=>r.level==='subitem' && r.start && r.breakdown);
@@ -3355,6 +3411,7 @@ let nextPatrimonioId = 1;
 let nextColaboradorId = 1;
 let nextDepositoCompraId = 1;
 let nextDepositoConsumoId = 1;
+let nextBancoId = 1;
 let saveSistemaDebounce = null;
 
 const SYSTEM_PAGES = [
@@ -3423,6 +3480,8 @@ async function loadSistemaGlobal(){
   sistemaGlobal.deposito.estoqueTransferenciasRecebidas = sistemaGlobal.deposito.estoqueTransferenciasRecebidas || [];
   nextDepositoCompraId = sistemaGlobal.deposito.compras.reduce((m,c)=>Math.max(m,c.id||0),0)+1;
   nextDepositoConsumoId = sistemaGlobal.deposito.estoqueConsumos.reduce((m,u)=>Math.max(m,u.id||0),0)+1;
+  sistemaGlobal.bancos = (sistemaGlobal.bancos||[]).map((b,i)=> typeof b==='string' ? {id: Date.now()+i, banco:b, agencia:'', conta:'', operacao:'', nome:b, saldoAtual:0} : b);
+  nextBancoId = sistemaGlobal.bancos.reduce((m,b)=>Math.max(m,b.id||0),0)+1;
   seedColaboradorPadrao();
   await refreshObrasCache();
   renderEmpresaAll();
@@ -3470,20 +3529,25 @@ function escDescSelectOptionsHtml(selected){
 }
 /* Linha de custo no formato "compra" (Tipo, Data, Loja, Nº nota/PIX, Forma pagto., Parc.,
    Banco, Descrição, Quant., Unid., R$/unid, Valor total, Entrega) — usado em Escritório e Depósito.
-   useDescCatalog=true liga a Descrição ao catálogo de itens cadastrados (só no Escritório). */
-function custoCompraRowHtml(c, prefix, useDescCatalog){
+   opts.useDescCatalog=true liga a Descrição ao catálogo de itens cadastrados (só no Escritório).
+   opts.showTipo/opts.showEntrega (default true) controlam se essas colunas aparecem (Escritório oculta ambas). */
+function custoCompraRowHtml(c, prefix, opts){
+  opts = opts || {};
+  const useDescCatalog = !!opts.useDescCatalog;
+  const showTipo = opts.showTipo!==false;
+  const showEntrega = opts.showEntrega!==false;
   const showParc = c.formaPagto==='Cartão de crédito';
   const descCell = useDescCatalog
     ? `<select class="cell" data-cxf="descricao" data-${prefix}="${c.id}">${escDescSelectOptionsHtml(c.descricao)}</select>`
     : `<input type="text" class="cell" data-cxf="descricao" data-${prefix}="${c.id}" value="${escapeAttr(c.descricao)}" placeholder="Descrição">`;
   return `<tr data-${prefix}="${c.id}">
-    <td><select class="cell" data-cxf="tipo" data-${prefix}="${c.id}">${TIPOS_COMPRA.map(t=>`<option ${t===c.tipo?'selected':''}>${t}</option>`).join('')}</select></td>
+    ${showTipo?`<td><select class="cell" data-cxf="tipo" data-${prefix}="${c.id}">${TIPOS_COMPRA.map(t=>`<option ${t===c.tipo?'selected':''}>${t}</option>`).join('')}</select></td>`:''}
     <td><input type="date" class="cell" data-cxf="data" data-${prefix}="${c.id}" value="${c.data||''}"></td>
     <td><input type="text" class="cell" data-cxf="loja" data-${prefix}="${c.id}" value="${escapeAttr(c.loja)}" placeholder="Loja / nome"></td>
     <td><input type="text" class="cell" data-cxf="notaNum" data-${prefix}="${c.id}" value="${escapeAttr(c.notaNum)}"></td>
     <td><select class="cell" data-cxf="formaPagto" data-${prefix}="${c.id}">${FORMAS_PAGTO.map(f=>`<option ${f===c.formaPagto?'selected':''}>${f}</option>`).join('')}</select></td>
     <td>${showParc?`<input type="number" min="1" step="1" class="cell small nospin" style="width:44px;" data-cxf="parcelas" data-${prefix}="${c.id}" value="${c.parcelas||1}" title="Nº de parcelas (1 = à vista)">`:'<span class="hint">—</span>'}</td>
-    <td><select class="cell" data-cxf="banco" data-${prefix}="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${b===c.banco?'selected':''}>${escapeXml(b)}</option>`).join('')}</select></td>
+    <td><select class="cell" data-cxf="banco" data-${prefix}="${c.id}"><option value="">—</option>${(sistemaGlobal.bancos||[]).map(b=>`<option ${contaBancariaLabel(b)===c.banco?'selected':''}>${escapeXml(contaBancariaLabel(b))}</option>`).join('')}</select></td>
     <td>${descCell}</td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cxf="quantidade" data-${prefix}="${c.id}" value="${fmtInput(c.quantidade)}"></td>
     <td><select class="cell" style="width:78px;" data-cxf="unidade" data-${prefix}="${c.id}">
@@ -3492,13 +3556,13 @@ function custoCompraRowHtml(c, prefix, useDescCatalog){
     </select></td>
     <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cxf="valorUnid" data-${prefix}="${c.id}" value="${fmtInput(c.valorUnid)}"></td>
     <td class="num" style="font-family:var(--mono);color:var(--accent)" data-${prefix}total="${c.id}">R$ ${fmtNum(c.valorTotal,2)}</td>
-    <td>
+    ${showEntrega?`<td>
       <select class="cell" data-cxf="entrega" data-${prefix}="${c.id}" style="margin-bottom:${c.entrega==='Entrega prevista'?'4px':'0'};">
         <option ${c.entrega==='Recebido'||!c.entrega?'selected':''}>Recebido</option>
         <option ${c.entrega==='Entrega prevista'?'selected':''}>Entrega prevista</option>
       </select>
       ${c.entrega==='Entrega prevista' ? `<input type="date" class="cell" data-cxf="dataEntregaPrevista" data-${prefix}="${c.id}" value="${c.dataEntregaPrevista||''}">` : ''}
-    </td>
+    </td>`:''}
     <td><button class="icon-btn" data-${prefix}remove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
 }
@@ -3558,7 +3622,7 @@ function renderEscCustos(){
   if(!tbody) return;
   const emptyEl = document.getElementById('emptyEscCustos');
   if(emptyEl) emptyEl.style.display = sistemaGlobal.escritorioCustos.length ? 'none':'block';
-  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(c=>custoCompraRowHtml(c,'esccusto',true)).join('');
+  tbody.innerHTML = sistemaGlobal.escritorioCustos.map(c=>custoCompraRowHtml(c,'esccusto',{useDescCatalog:true, showTipo:false, showEntrega:false})).join('');
   bindCustoCompraEvents('tbodyEscCustos', 'esccusto', sistemaGlobal.escritorioCustos, (f)=>{
     saveSistemaGlobal();
     if(f==='descricao_catalog_added'){ renderEscDescricoes(); renderEscCustos(); return; }
@@ -3589,7 +3653,8 @@ function renderResumoEscCustos(){
     document.getElementById('theadResumoEscCustos'),
     document.getElementById('tbodyResumoEscCustos'),
     document.getElementById('emptyResumoEscCustos'),
-    sistemaGlobal.escritorioCustos
+    sistemaGlobal.escritorioCustos,
+    'descricao'
   );
 }
 function fmtMesLabel(m){
@@ -3602,7 +3667,6 @@ function addEscCusto(){
   renderEscCustos(); saveSistemaGlobal();
 }
 function setupEscritorioTab(){
-  document.getElementById('btnAddEscDescricao').addEventListener('click', addEscDescricao);
   document.getElementById('btnAddEscCusto').addEventListener('click', addEscCusto);
 }
 
@@ -4349,12 +4413,15 @@ function populateExtSistFilterOptions(){
   const tipos = [...new Set(extSistLinhas.map(l=>l.tipo))].sort();
   const formas = [...new Set(extSistLinhas.map(l=>(l.formaPagto||'').replace(/\s*\(\d+\/\d+\)$/,'')))].filter(Boolean).sort();
   const bancos = [...new Set(extSistLinhas.map(l=>l.banco).filter(Boolean))].sort();
+  const centros = [...new Set(extSistLinhas.map(l=>l.origem).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
   const selTipo = document.getElementById('extFiltroTipo');
   const selForma = document.getElementById('extFiltroForma');
   const selBanco = document.getElementById('extFiltroBanco');
+  const selCentro = document.getElementById('extFiltroCentro');
   if(selTipo){ const v=selTipo.value; selTipo.innerHTML = `<option value="">todos</option>` + tipos.map(t=>`<option>${escapeXml(t)}</option>`).join(''); selTipo.value = v; }
   if(selForma){ const v=selForma.value; selForma.innerHTML = `<option value="">todas</option>` + formas.map(f=>`<option>${escapeXml(f)}</option>`).join(''); selForma.value = v; }
   if(selBanco){ const v=selBanco.value; selBanco.innerHTML = `<option value="">todos</option>` + bancos.map(b=>`<option>${escapeXml(b)}</option>`).join(''); selBanco.value = v; }
+  if(selCentro){ const v=selCentro.value; selCentro.innerHTML = `<option value="">todos</option>` + centros.map(c=>`<option>${escapeXml(c)}</option>`).join(''); selCentro.value = v; }
 }
 function extSistPeriodRange(){
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -4387,12 +4454,14 @@ function renderExtratoSistema(){
   const filtroTipo = document.getElementById('extFiltroTipo')?.value||'';
   const filtroForma = document.getElementById('extFiltroForma')?.value||'';
   const filtroBanco = document.getElementById('extFiltroBanco')?.value||'';
+  const filtroCentro = document.getElementById('extFiltroCentro')?.value||'';
   const filtradas = extSistLinhas.filter(l=>{
     if(l.data<start || l.data>end) return false;
     if(filtroLoja && !(l.loja||'').toLowerCase().includes(filtroLoja)) return false;
     if(filtroTipo && l.tipo!==filtroTipo) return false;
     if(filtroForma && !(l.formaPagto||'').startsWith(filtroForma)) return false;
     if(filtroBanco && l.banco!==filtroBanco) return false;
+    if(filtroCentro && l.origem!==filtroCentro) return false;
     return true;
   });
   const emptyEl = document.getElementById('emptyExtSistema');
@@ -4407,6 +4476,7 @@ function renderExtratoSistema(){
       <td>${escapeXml(l.formaPagto)}</td>
       <td class="num" style="font-family:var(--mono);color:${l.valor<0?'var(--red)':'var(--green)'}">${l.valor<0?'-':'+'} R$ ${fmtNum(Math.abs(l.valor),2)}</td>
       <td>${escapeXml(l.banco||'—')}</td>
+      <td>${escapeXml(l.origem||'—')}</td>
     </tr>`;
   }).join('');
   const totalEntradas = filtradas.filter(l=>l.valor>0).reduce((s,l)=>s+l.valor,0);
@@ -4482,7 +4552,7 @@ function setupExtratoSistemaTab(){
       renderExtratoSistema();
     });
   });
-  ['extFiltroLoja','extFiltroTipo','extFiltroForma','extFiltroBanco'].forEach(id=>{
+  ['extFiltroLoja','extFiltroTipo','extFiltroForma','extFiltroBanco','extFiltroCentro'].forEach(id=>{
     const el = document.getElementById(id);
     if(el) el.addEventListener('input', renderExtratoSistema);
   });
@@ -4525,28 +4595,8 @@ function renderConsolidacao(){
   }
   renderConsolidacaoChart();
   renderExpectativaSaldoChart();
-  renderComprasConsolidadas();
   renderResumoFinanceiro();
   if(extratoLinhas.length) renderConciliacao();
-}
-function renderComprasConsolidadas(){
-  const tbody = document.getElementById('tbodyComprasConsolidadas');
-  const emptyEl = document.getElementById('emptyComprasConsolidadas');
-  if(!tbody) return;
-  const linhas = [];
-  consolidacaoObras.forEach(o=>{
-    (o.compras||[]).forEach(c=>{
-      linhas.push({data:c.data||'', loja:c.loja||c.descricao||'(sem loja)', valor:c.valorTotal||0, obra:o.nome});
-    });
-  });
-  linhas.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
-  if(emptyEl) emptyEl.style.display = linhas.length ? 'none':'block';
-  tbody.innerHTML = linhas.map(l=>`<tr>
-    <td>${l.data?fmtDate(l.data):'—'}</td>
-    <td>${escapeXml(l.loja)}</td>
-    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(l.valor,2)}</td>
-    <td>${escapeXml(l.obra)}</td>
-  </tr>`).join('');
 }
 function renderConsolidacaoChart(){
   const canvas = document.getElementById('chartConsolidacaoObras');

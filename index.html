@@ -1003,7 +1003,6 @@ tr[draggable="true"]{cursor:default;}
           <div class="stats" id="escCustosStatsStrip"></div>
           <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblEscCustos">
             <thead><tr>
-              <th style="width:120px;">Tipo</th>
               <th style="width:120px;">Data</th>
               <th style="min-width:130px;">Loja / nome</th>
               <th style="width:100px;">Nº nota/PIX</th>
@@ -1015,7 +1014,6 @@ tr[draggable="true"]{cursor:default;}
               <th style="width:80px;">Unid.</th>
               <th style="width:90px;" class="num">R$/unid</th>
               <th style="width:110px;" class="num">Valor total</th>
-              <th style="width:150px;">Entrega</th>
               <th style="width:34px;"></th>
             </tr></thead>
             <tbody id="tbodyEscCustos"></tbody>
@@ -1023,20 +1021,8 @@ tr[draggable="true"]{cursor:default;}
           <div class="empty-state" id="emptyEscCustos" style="display:none;padding:20px;">Nenhum custo lançado ainda.</div>
         </div>
         <div class="card">
-          <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">catálogo</span>Itens cadastrados</h2>
-            <button class="btn small primary" id="btnAddEscDescricao">+ Novo item</button>
-          </div>
-          <p class="desc">Itens recorrentes de custo (ex: Água, Energia, Internet, Aluguel, Telefone). Aparecem na lista suspensa "Descrição" da tabela de custos acima.</p>
-          <div class="tbl-wrap"><table class="qtbl zebra" id="tblEscDescricoes">
-            <thead><tr><th>Descrição</th><th style="width:34px;"></th></tr></thead>
-            <tbody id="tbodyEscDescricoes"></tbody>
-          </table></div>
-          <div class="empty-state" id="emptyEscDescricoes" style="display:none;padding:16px;">Nenhum item cadastrado ainda.</div>
-        </div>
-        <div class="card">
           <h2><span class="tag">resumo</span>Resumo de gastos — Item × Mês</h2>
-          <p class="desc">Soma dos valores lançados por tipo (Mão de obra, Material, Equipamento, Extra), cruzando com o mês do lançamento. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
+          <p class="desc">Soma dos valores lançados por descrição, cruzando com o mês do lançamento. Compras parceladas no cartão são distribuídas nos meses seguintes.</p>
           <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblResumoEscCustos">
             <thead><tr id="theadResumoEscCustos"></tr></thead>
             <tbody id="tbodyResumoEscCustos"></tbody>
@@ -1193,20 +1179,6 @@ tr[draggable="true"]{cursor:default;}
           <div class="empty-state" id="emptyResumoFinanceiro" style="display:none;padding:20px;">Sem gastos lançados ainda.</div>
         </div>
         <div class="card">
-          <h2><span class="tag">todas as obras</span>Compras consolidadas</h2>
-          <p class="desc">Todas as compras registradas em todas as obras, por data.</p>
-          <div class="tbl-wrap"><table class="qtbl zebra" id="tblComprasConsolidadas">
-            <thead><tr>
-              <th style="width:110px;">Data</th>
-              <th style="min-width:160px;">Loja</th>
-              <th style="width:120px;" class="num">Valor (R$)</th>
-              <th style="min-width:150px;">Obra</th>
-            </tr></thead>
-            <tbody id="tbodyComprasConsolidadas"></tbody>
-          </table></div>
-          <div class="empty-state" id="emptyComprasConsolidadas" style="display:none;padding:20px;">Nenhuma compra encontrada ainda. Clique em "Atualizar" acima.</div>
-        </div>
-        <div class="card">
           <div class="toolbar-row">
             <h2 style="margin:0;"><span class="tag">sistema</span>Extrato do sistema</h2>
           </div>
@@ -1234,6 +1206,7 @@ tr[draggable="true"]{cursor:default;}
                 <th style="width:170px;">Forma de pagamento</th>
                 <th style="width:120px;" class="num">Valor (R$)</th>
                 <th style="width:110px;">Banco</th>
+                <th style="width:130px;">Centro de custo</th>
               </tr>
               <tr class="filter-row">
                 <th></th>
@@ -1242,6 +1215,7 @@ tr[draggable="true"]{cursor:default;}
                 <th><select class="cell small" id="extFiltroForma"><option value="">todas</option></select></th>
                 <th></th>
                 <th><select class="cell small" id="extFiltroBanco"><option value="">todos</option></select></th>
+                <th><select class="cell small" id="extFiltroCentro"><option value="">todos</option></select></th>
               </tr>
             </thead>
             <tbody id="tbodyExtSistema"></tbody>

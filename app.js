@@ -45,6 +45,95 @@ let muroRows = [];
 let nextMuroId = 1;
 const REVEST_TIPOS_BASE = ['Tinta','Textura','Papel de parede','Revestimento/Pedra'];
 let customRevestTipos = [];
+
+/* ============================================================
+   15f. QUANTITATIVOS — itens 2 a 11 (esquadrias, louças, piso/forro,
+   telhado, fundação, viga baldrame, pilares, vigas, vergas, laje)
+   ============================================================ */
+const QO_BITOLA_TABLE = {
+  '5 mm':1.85, '6,3 mm':2.94, '8 mm':4.74, '10 mm':7.40, '12,5 mm':11.56,
+  '16 mm':18.94, '20 mm':29.60, '25 mm':46.24, '32 mm':75.76, '40 mm':118.38
+};
+const QO_BITOLA_KEYS = Object.keys(QO_BITOLA_TABLE);
+function qoBitolaOptionsHtml(sel){ return QO_BITOLA_KEYS.map(b=>`<option value="${b}" ${b===sel?'selected':''}>${b}</option>`).join(''); }
+function qoFckOptionsHtml(sel){ return [15,20,25].map(f=>`<option value="${f}" ${f===sel?'selected':''}>${f}</option>`).join(''); }
+function qoTracoAux(concreto, fck){
+  const fCimento = fck===15 ? (271/50) : (fck===20 ? (305/50) : (329/50));
+  const cimento = fCimento*concreto;
+  const fAreiaLata = fck===15 ? 6.3 : (fck===20 ? 5.5 : 5.1);
+  const areiaLata = fAreiaLata*cimento;
+  const areiaM3 = areiaLata*0.018;
+  const fBritaLata = fck===15 ? 5.6 : (fck===20 ? 5.1 : 4.8);
+  const britaLata = fBritaLata*cimento;
+  const britaM3 = britaLata*0.018;
+  const fAgua = fck===15 ? 2 : (fck===20 ? 1.8 : 1.6);
+  const agua = fAgua*cimento;
+  const aditivo = (cimento*630)/1000;
+  return {cimento,areiaLata,areiaM3,britaLata,britaM3,agua,aditivo};
+}
+
+/* --- 2. Esquadrias e acessórios --- */
+let esquadriaRows = [];
+let nextEsquadriaId = 1;
+let acessorioRows = [];
+let nextAcessorioId = 1;
+
+/* --- 3. Louças e metais --- */
+let loucaRows = [];
+let nextLoucaId = 1;
+
+/* --- 4. Piso e forro --- */
+let pisoCadRows = [];
+let nextPisoCadId = 1;
+let forroCadRows = [];
+let nextForroCadId = 1;
+let ambienteRows = [];
+let nextAmbienteId = 1;
+
+/* --- 5. Telhado --- */
+let telhadoRows = [];
+let nextTelhadoId = 1;
+let telhaCeramicaConfig = {consumo:0, perca:0};
+let calhaRows = [];
+let nextCalhaId = 1;
+let chapimRows = [];
+let nextChapimId = 1;
+let rufoRows = [];
+let nextRufoId = 1;
+
+/* --- 6. Fundação — sapata --- */
+let sapataRows = [];
+let nextSapataId = 1;
+let fckGlobalFund = 20;
+let lastroAlturaFund = 0.05;
+let reapBaldrameFund = 3;
+let acoResumoFund = { mode:'auto', manual:{} };
+
+/* --- 7/8/9. Elementos lineares (viga baldrame, pilares, vigas) --- */
+function qoNovoElementoState(itemPrefix){
+  return { itens:[], fckGlobal:20, lastroAltura:0.05, reaproveitamento:3, itemPrefix, acoResumo:{mode:'auto', manual:{}} };
+}
+let vigaBaldrameState = qoNovoElementoState('Viga baldrame');
+let nextVigaBaldrameId = 1;
+let pilaresState = qoNovoElementoState('Pilar');
+let nextPilarId = 1;
+let vigasState = qoNovoElementoState('Viga');
+let nextVigaId = 1;
+const QO_ELEMENTO_CFG = {
+  vigaBaldrame: {title:'Viga baldrame', aoLabels:['Superior','Inferior'], extrasMode:'full', formaLabel:'Forma de tábuas do baldrame (m²)'},
+  pilares: {title:'Pilares', aoLabels:['Lado 1','Lado 2'], extrasMode:'formaOnly', formaLabel:'Forma de tábuas dos pilares (m²)'},
+  vigas: {title:'Vigas', aoLabels:['Superior','Inferior'], extrasMode:'full', formaLabel:'Forma de tábuas das vigas (m²)'}
+};
+const QO_ELEMENTOS = { vigaBaldrame: vigaBaldrameState, pilares: pilaresState, vigas: vigasState };
+
+/* --- 10. Vergas e contravergas --- */
+let vergaConfigByEsqId = {};
+let fckGlobalVerga = 15;
+
+/* --- 11. Laje --- */
+let lajeRows = [];
+let nextLajeId = 1;
+
 function allRevestTipos(){ return [...REVEST_TIPOS_BASE, ...customRevestTipos]; }
 function tipoOptionsHtml(selected){
   const tipos = allRevestTipos();
@@ -3030,11 +3119,1056 @@ function renderAlvenariaAll(){
   renderRevestimentos();
   renderAlvenaria();
   renderMuro();
+  renderQuantitativosExtra();
 }
+function renderQuantitativosExtra(){
+  try{ renderEsquadrias(); }catch(e){ console.error('Esquadrias:', e); }
+  try{ renderLoucas(); }catch(e){ console.error('Louças:', e); }
+  try{ renderPisoForro(); }catch(e){ console.error('Piso/forro:', e); }
+  try{ renderTelhado(); }catch(e){ console.error('Telhado:', e); }
+  try{ renderSapatas(); }catch(e){ console.error('Sapatas:', e); }
+  try{ renderElemento('vigaBaldrame'); }catch(e){ console.error('Viga baldrame:', e); }
+  try{ renderElemento('pilares'); }catch(e){ console.error('Pilares:', e); }
+  try{ renderElemento('vigas'); }catch(e){ console.error('Vigas:', e); }
+  try{ renderVergas(); }catch(e){ console.error('Vergas:', e); }
+  try{ renderLaje(); }catch(e){ console.error('Laje:', e); }
+}
+
+/* ---------- 2. ESQUADRIAS E ACESSÓRIOS ---------- */
+function addEsquadriaRow(){
+  esquadriaRows.push({id:nextEsquadriaId++, tipo:'Porta', nome:'', material:'Madeira', quantidade:1, altura:0, largura:0, peitoril:0, pintar:false, novas:false});
+  renderEsquadrias(); saveProject();
+}
+function esquadriaRowHtml(r){
+  const areaUnit = r.altura*r.largura, areaTotal = areaUnit*r.quantidade;
+  return `<tr data-esq="${r.id}">
+    <td><input type="text" class="cell" data-ef="tipo" data-esq="${r.id}" value="${escapeAttr(r.tipo)}" style="width:90px"></td>
+    <td><input type="text" class="cell" data-ef="nome" data-esq="${r.id}" value="${escapeAttr(r.nome)}" style="width:70px"></td>
+    <td><input type="text" class="cell" data-ef="material" data-esq="${r.id}" value="${escapeAttr(r.material)}" style="width:90px"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-ef="quantidade" data-esq="${r.id}" value="${fmtInput(r.quantidade)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ef="altura" data-esq="${r.id}" value="${fmtInput(r.altura)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ef="largura" data-esq="${r.id}" value="${fmtInput(r.largura)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaUnit,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaTotal,2)}</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ef="peitoril" data-esq="${r.id}" value="${fmtInput(r.peitoril)}"></td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="pintar" data-esq="${r.id}" ${r.pintar?'checked':''}></td>
+    <td style="text-align:center;"><input type="checkbox" data-ef="novas" data-esq="${r.id}" ${r.novas?'checked':''}></td>
+    <td><button class="icon-btn" data-esqremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindEsquadriaEvents(){
+  document.querySelectorAll('#tblEsquadrias [data-ef]').forEach(el=>{
+    const ev = (el.type==='checkbox') ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const r = esquadriaRows.find(x=>String(x.id)===el.dataset.esq);
+      if(!r) return;
+      const f = el.dataset.ef;
+      if(f==='pintar'||f==='novas') r[f]=el.checked;
+      else if(f==='quantidade') r[f]=parseInt(el.value)||0;
+      else if(f==='altura'||f==='largura'||f==='peitoril') r[f]=parseFloat(el.value)||0;
+      else r[f]=el.value;
+      renderEsquadrias(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-esqremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      esquadriaRows = esquadriaRows.filter(r=>String(r.id)!==btn.dataset.esqremove);
+      delete vergaConfigByEsqId[btn.dataset.esqremove];
+      renderEsquadrias(); renderVergas(); saveProject();
+    });
+  });
+}
+function addAcessorioRow(){
+  acessorioRows.push({id:nextAcessorioId++, tipo:'Porta', material:'Madeira', nome:'', qtUnid:1, valorUnit:0});
+  renderEsquadrias(); saveProject();
+}
+function acessorioRowHtml(a){
+  const qtEsq = esquadriaRows.filter(e=>e.tipo===a.tipo && e.material===a.material).reduce((s,e)=>s+e.quantidade,0);
+  const qtTotal = a.qtUnid*qtEsq, valorTotal = qtTotal*a.valorUnit;
+  return `<tr data-acc="${a.id}">
+    <td><input type="text" class="cell" data-acf="tipo" data-acc="${a.id}" value="${escapeAttr(a.tipo)}" style="width:90px"></td>
+    <td><input type="text" class="cell" data-acf="material" data-acc="${a.id}" value="${escapeAttr(a.material)}" style="width:90px"></td>
+    <td><input type="text" class="cell" data-acf="nome" data-acc="${a.id}" value="${escapeAttr(a.nome)}" style="width:180px"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-acf="qtUnid" data-acc="${a.id}" value="${fmtInput(a.qtUnid)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${qtEsq}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(qtTotal,2)}</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-acf="valorUnit" data-acc="${a.id}" value="${fmtInput(a.valorUnit)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtMoneyQO(valorTotal)}</td>
+    <td><button class="icon-btn" data-accremove="${a.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function fmtMoneyQO(v){ return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
+function bindAcessorioEvents(){
+  document.querySelectorAll('#tblAcessorios [data-acf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const a = acessorioRows.find(x=>String(x.id)===el.dataset.acc);
+      if(!a) return;
+      const f = el.dataset.acf;
+      if(f==='qtUnid'||f==='valorUnit') a[f]=parseFloat(el.value)||0;
+      else a[f]=el.value;
+      renderEsquadrias(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-accremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      acessorioRows = acessorioRows.filter(r=>String(r.id)!==btn.dataset.accremove);
+      renderEsquadrias(); saveProject();
+    });
+  });
+}
+function renderEsquadrias(){
+  const tbody = document.getElementById('tbodyEsquadrias');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyEsquadrias');
+  if(emptyEl) emptyEl.style.display = esquadriaRows.length ? 'none':'block';
+  tbody.innerHTML = esquadriaRows.map(esquadriaRowHtml).join('');
+  bindEsquadriaEvents();
+
+  const porTipo = {}, porMat = {};
+  esquadriaRows.forEach(r=>{
+    const at = r.altura*r.largura*r.quantidade;
+    if(!porTipo[r.tipo]) porTipo[r.tipo]={qt:0,area:0};
+    porTipo[r.tipo].qt+=r.quantidade; porTipo[r.tipo].area+=at;
+    if(!porMat[r.material]) porMat[r.material]={qt:0,area:0};
+    porMat[r.material].qt+=r.quantidade; porMat[r.material].area+=at;
+  });
+  const tbodyTipo = document.getElementById('tbodyResumoEsqTipo');
+  if(tbodyTipo) tbodyTipo.innerHTML = Object.keys(porTipo).sort().map(t=>`<tr><td>${escapeXml(t)}</td><td class="num">${porTipo[t].qt}</td><td class="num">${fmtNum(porTipo[t].area,2)} m²</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-faint)">Sem dados</td></tr>';
+  const tbodyMat = document.getElementById('tbodyResumoEsqMaterial');
+  if(tbodyMat) tbodyMat.innerHTML = Object.keys(porMat).sort().map(m=>`<tr><td>${escapeXml(m)}</td><td class="num">${porMat[m].qt}</td><td class="num">${fmtNum(porMat[m].area,2)} m²</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-faint)">Sem dados</td></tr>';
+
+  const tbodyAcc = document.getElementById('tbodyAcessorios');
+  if(tbodyAcc){
+    const emptyAcc = document.getElementById('emptyAcessorios');
+    if(emptyAcc) emptyAcc.style.display = acessorioRows.length ? 'none':'block';
+    tbodyAcc.innerHTML = acessorioRows.map(acessorioRowHtml).join('');
+    bindAcessorioEvents();
+    let grand = 0;
+    acessorioRows.forEach(a=>{
+      const qtEsq = esquadriaRows.filter(e=>e.tipo===a.tipo && e.material===a.material).reduce((s,e)=>s+e.quantidade,0);
+      grand += a.qtUnid*qtEsq*a.valorUnit;
+    });
+    const elGrand = document.getElementById('acessoriosGrandTotal');
+    if(elGrand) elGrand.textContent = fmtMoneyQO(grand);
+  }
+  const meta = document.getElementById('qMetaEsquadrias');
+  if(meta) meta.textContent = `${esquadriaRows.length} esquadria(s)`;
+  renderVergas();
+}
+
+/* ---------- 3. LOUÇAS E METAIS ---------- */
+function addLoucaRow(){
+  loucaRows.push({id:nextLoucaId++, descricao:'', local:'', qt:1, repeticoes:1, valorUnit:0});
+  renderLoucas(); saveProject();
+}
+function loucaRowHtml(r){
+  const total = r.qt*r.repeticoes, valorTotal = total*r.valorUnit;
+  return `<tr data-louca="${r.id}">
+    <td><input type="text" class="cell" data-lf="descricao" data-louca="${r.id}" value="${escapeAttr(r.descricao)}" style="width:170px"></td>
+    <td><input type="text" class="cell" data-lf="local" data-louca="${r.id}" value="${escapeAttr(r.local)}" style="width:110px"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-lf="qt" data-louca="${r.id}" value="${fmtInput(r.qt)}"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-lf="repeticoes" data-louca="${r.id}" value="${fmtInput(r.repeticoes)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(total,2)}</td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-lf="valorUnit" data-louca="${r.id}" value="${fmtInput(r.valorUnit)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtMoneyQO(valorTotal)}</td>
+    <td><button class="icon-btn" data-loucaremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindLoucaEvents(){
+  document.querySelectorAll('#tblLoucas [data-lf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const r = loucaRows.find(x=>String(x.id)===el.dataset.louca);
+      if(!r) return;
+      const f = el.dataset.lf;
+      if(f==='qt'||f==='repeticoes'||f==='valorUnit') r[f]=parseFloat(el.value)||0;
+      else r[f]=el.value;
+      renderLoucas(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-loucaremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      loucaRows = loucaRows.filter(r=>String(r.id)!==btn.dataset.loucaremove);
+      renderLoucas(); saveProject();
+    });
+  });
+}
+function renderLoucas(){
+  const tbody = document.getElementById('tbodyLoucas');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyLoucas');
+  if(emptyEl) emptyEl.style.display = loucaRows.length ? 'none':'block';
+  tbody.innerHTML = loucaRows.map(loucaRowHtml).join('');
+  bindLoucaEvents();
+  const grand = loucaRows.reduce((s,r)=>s+(r.qt*r.repeticoes*r.valorUnit),0);
+  const el = document.getElementById('loucasGrandTotal');
+  if(el) el.textContent = fmtMoneyQO(grand);
+  const meta = document.getElementById('qMetaLoucas');
+  if(meta) meta.textContent = `${loucaRows.length} item(ns) · ${fmtMoneyQO(grand)}`;
+}
+
+/* ---------- 4. PISO E FORRO ---------- */
+function addPisoCadRow(){ pisoCadRows.push({id:nextPisoCadId++, nome:'', perca:10}); renderPisoForro(); saveProject(); }
+function addForroCadRow(){ forroCadRows.push({id:nextForroCadId++, nome:'', perca:10}); renderPisoForro(); saveProject(); }
+function addAmbienteRow(){
+  ambienteRows.push({id:nextAmbienteId++, local:'', pavimento:1, piso:'', area:0, perimetro:0, contrapiso:false, imp1:0, imp2:0, forro:''});
+  renderPisoForro(); saveProject();
+}
+function ambienteRowHtml(r){
+  const areaImp = (r.imp1>0 && r.imp2>0) ? (r.imp1+0.40)*(r.imp2+0.40) : 0;
+  const pisoOpts = ['<option value=""></option>'].concat(pisoCadRows.map(p=>`<option value="${escapeAttr(p.nome)}" ${p.nome===r.piso?'selected':''}>${escapeXml(p.nome||'(sem nome)')}</option>`)).join('');
+  const forroOpts = ['<option value=""></option>'].concat(forroCadRows.map(f=>`<option value="${escapeAttr(f.nome)}" ${f.nome===r.forro?'selected':''}>${escapeXml(f.nome||'(sem nome)')}</option>`)).join('');
+  return `<tr data-amb="${r.id}">
+    <td><input type="text" class="cell" data-amf="local" data-amb="${r.id}" value="${escapeAttr(r.local)}" style="width:110px"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-amf="pavimento" data-amb="${r.id}" value="${fmtInput(r.pavimento)}"></td>
+    <td><select class="cell" data-amf="piso" data-amb="${r.id}">${pisoOpts}</select></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-amf="area" data-amb="${r.id}" value="${fmtInput(r.area)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-amf="perimetro" data-amb="${r.id}" value="${fmtInput(r.perimetro)}"></td>
+    <td style="text-align:center;"><input type="checkbox" data-amf="contrapiso" data-amb="${r.id}" ${r.contrapiso?'checked':''}></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-amf="imp1" data-amb="${r.id}" value="${fmtInput(r.imp1)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-amf="imp2" data-amb="${r.id}" value="${fmtInput(r.imp2)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaImp,2)}</td>
+    <td><select class="cell" data-amf="forro" data-amb="${r.id}">${forroOpts}</select></td>
+    <td><button class="icon-btn" data-ambremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function pisoCadRowHtml(p){
+  const areaSum = ambienteRows.filter(r=>r.piso===p.nome).reduce((s,r)=>s+r.area,0);
+  const total = areaSum*(1+(p.perca/100));
+  return `<tr data-pisocad="${p.id}">
+    <td><input type="text" class="cell" data-pcf="nome" data-pisocad="${p.id}" value="${escapeAttr(p.nome)}" placeholder="Ex: Porcelanato" style="width:150px"></td>
+    <td class="num"><input type="number" step="0.5" class="cell small nospin" data-pcf="perca" data-pisocad="${p.id}" value="${fmtInput(p.perca)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaSum,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(total,2)}</td>
+    <td><button class="icon-btn" data-pisocadremove="${p.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function forroCadRowHtml(f){
+  const areaSum = ambienteRows.filter(r=>r.forro===f.nome).reduce((s,r)=>s+r.area,0);
+  const total = areaSum*(1+(f.perca/100));
+  return `<tr data-forrocad="${f.id}">
+    <td><input type="text" class="cell" data-fcf="nome" data-forrocad="${f.id}" value="${escapeAttr(f.nome)}" placeholder="Ex: Gesso" style="width:150px"></td>
+    <td class="num"><input type="number" step="0.5" class="cell small nospin" data-fcf="perca" data-forrocad="${f.id}" value="${fmtInput(f.perca)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaSum,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(total,2)}</td>
+    <td><button class="icon-btn" data-forrocadremove="${f.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindPisoForroEvents(){
+  document.querySelectorAll('#tblAmbientes [data-amf]').forEach(el=>{
+    const ev = (el.type==='checkbox'||el.tagName==='SELECT') ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const r = ambienteRows.find(x=>String(x.id)===el.dataset.amb);
+      if(!r) return;
+      const f = el.dataset.amf;
+      if(f==='contrapiso') r[f]=el.checked;
+      else if(f==='pavimento') r[f]=parseInt(el.value)||1;
+      else if(f==='area'||f==='perimetro'||f==='imp1'||f==='imp2') r[f]=parseFloat(el.value)||0;
+      else r[f]=el.value;
+      renderPisoForro(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-ambremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ ambienteRows = ambienteRows.filter(r=>String(r.id)!==btn.dataset.ambremove); renderPisoForro(); saveProject(); });
+  });
+  document.querySelectorAll('#tblPisoCad [data-pcf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const r = pisoCadRows.find(x=>String(x.id)===el.dataset.pisocad);
+      if(!r) return;
+      r[el.dataset.pcf] = el.dataset.pcf==='perca' ? (parseFloat(el.value)||0) : el.value;
+      renderPisoForro(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-pisocadremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ pisoCadRows = pisoCadRows.filter(r=>String(r.id)!==btn.dataset.pisocadremove); renderPisoForro(); saveProject(); });
+  });
+  document.querySelectorAll('#tblForroCad [data-fcf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const r = forroCadRows.find(x=>String(x.id)===el.dataset.forrocad);
+      if(!r) return;
+      r[el.dataset.fcf] = el.dataset.fcf==='perca' ? (parseFloat(el.value)||0) : el.value;
+      renderPisoForro(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-forrocadremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ forroCadRows = forroCadRows.filter(r=>String(r.id)!==btn.dataset.forrocadremove); renderPisoForro(); saveProject(); });
+  });
+}
+function renderPisoForro(){
+  const tbAmb = document.getElementById('tbodyAmbientes');
+  if(!tbAmb) return;
+  const emptyAmb = document.getElementById('emptyAmbientes');
+  if(emptyAmb) emptyAmb.style.display = ambienteRows.length ? 'none':'block';
+  tbAmb.innerHTML = ambienteRows.map(ambienteRowHtml).join('');
+  const tbPiso = document.getElementById('tbodyPisoCad');
+  if(tbPiso) tbPiso.innerHTML = pisoCadRows.map(pisoCadRowHtml).join('');
+  const tbForro = document.getElementById('tbodyForroCad');
+  if(tbForro) tbForro.innerHTML = forroCadRows.map(forroCadRowHtml).join('');
+  bindPisoForroEvents();
+  const meta = document.getElementById('qMetaPisoForro');
+  if(meta) meta.textContent = `${ambienteRows.length} ambiente(s)`;
+}
+
+/* ---------- 5. TELHADO ---------- */
+function fcTelhaQO(inclinacaoPct){
+  const frac = inclinacaoPct/100;
+  if(frac<=0) return 1;
+  return 1/Math.cos(Math.atan(frac));
+}
+function addTelhadoRowQO(){ telhadoRows.push({id:nextTelhadoId++, tipo:'Cerâmica', local:'', area:0, inclinacao:0}); renderTelhado(); saveProject(); }
+function telhadoRowHtml(r){
+  const fc = fcTelhaQO(r.inclinacao), areaReal = r.area*fc;
+  return `<tr data-tel="${r.id}">
+    <td><input type="text" class="cell" data-tf="tipo" data-tel="${r.id}" value="${escapeAttr(r.tipo)}" style="width:110px"></td>
+    <td><input type="text" class="cell" data-tf="local" data-tel="${r.id}" value="${escapeAttr(r.local)}" style="width:100px"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-tf="area" data-tel="${r.id}" value="${fmtInput(r.area)}"></td>
+    <td class="num"><input type="number" step="0.1" class="cell small nospin" data-tf="inclinacao" data-tel="${r.id}" value="${fmtInput(r.inclinacao)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(fc,3)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaReal,2)}</td>
+    <td><button class="icon-btn" data-telremove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function addCalhaRowQO(){ calhaRows.push({id:nextCalhaId++, local:'', comp:0, largura:0}); renderTelhado(); saveProject(); }
+function calhaRowHtml(r){
+  const areaReal = r.comp*r.largura;
+  return `<tr data-calha="${r.id}">
+    <td><input type="text" class="cell" data-cf="local" data-calha="${r.id}" value="${escapeAttr(r.local)}" style="width:130px"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="comp" data-calha="${r.id}" value="${fmtInput(r.comp)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-cf="largura" data-calha="${r.id}" value="${fmtInput(r.largura)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(areaReal,2)}</td>
+    <td><button class="icon-btn" data-calharemove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function addChapimRowQO(){ chapimRows.push({id:nextChapimId++, local:'', comprimento:0}); renderTelhado(); saveProject(); }
+function addRufoRowQO(){ rufoRows.push({id:nextRufoId++, local:'', comprimento:0}); renderTelhado(); saveProject(); }
+function linearRowHtml(r, prefix){
+  return `<tr data-${prefix}="${r.id}">
+    <td><input type="text" class="cell" data-${prefix}f="local" data-${prefix}="${r.id}" value="${escapeAttr(r.local)}" style="width:150px"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-${prefix}f="comprimento" data-${prefix}="${r.id}" value="${fmtInput(r.comprimento)}"></td>
+    <td><button class="icon-btn" data-${prefix}remove="${r.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindTelhadoEvents(){
+  document.querySelectorAll('#tblTelhado [data-tf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const r = telhadoRows.find(x=>String(x.id)===el.dataset.tel);
+      if(!r) return;
+      const f = el.dataset.tf;
+      r[f] = (f==='tipo'||f==='local') ? el.value : (parseFloat(el.value)||0);
+      renderTelhado(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-telremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ telhadoRows = telhadoRows.filter(r=>String(r.id)!==btn.dataset.telremove); renderTelhado(); saveProject(); });
+  });
+  document.querySelectorAll('#tblCalhas [data-cf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const r = calhaRows.find(x=>String(x.id)===el.dataset.calha);
+      if(!r) return;
+      const f = el.dataset.cf;
+      r[f] = f==='local' ? el.value : (parseFloat(el.value)||0);
+      renderTelhado(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-calharemove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ calhaRows = calhaRows.filter(r=>String(r.id)!==btn.dataset.calharemove); renderTelhado(); saveProject(); });
+  });
+  ['chapim','rufo'].forEach(prefix=>{
+    const arr = prefix==='chapim' ? chapimRows : rufoRows;
+    document.querySelectorAll(`#tbl${prefix==='chapim'?'Chapins':'Rufos'} [data-${prefix}f]`).forEach(el=>{
+      el.addEventListener('input', ()=>{
+        const r = arr.find(x=>String(x.id)===el.dataset[prefix]);
+        if(!r) return;
+        const f = el.dataset[prefix+'f'];
+        r[f] = f==='local' ? el.value : (parseFloat(el.value)||0);
+        renderTelhado(); saveProject();
+      });
+    });
+    document.querySelectorAll(`[data-${prefix}remove]`).forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        if(prefix==='chapim') chapimRows = chapimRows.filter(r=>String(r.id)!==btn.dataset[prefix+'remove']);
+        else rufoRows = rufoRows.filter(r=>String(r.id)!==btn.dataset[prefix+'remove']);
+        renderTelhado(); saveProject();
+      });
+    });
+  });
+  const consumoEl = document.getElementById('telhaConsumo');
+  if(consumoEl) consumoEl.addEventListener('input', ()=>{ telhaCeramicaConfig.consumo = parseFloat(consumoEl.value)||0; renderTelhado(); saveProject(); });
+  const percaEl = document.getElementById('telhaPerca');
+  if(percaEl) percaEl.addEventListener('input', ()=>{ telhaCeramicaConfig.perca = parseFloat(percaEl.value)||0; renderTelhado(); saveProject(); });
+}
+function renderTelhado(){
+  const tbody = document.getElementById('tbodyTelhado');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyTelhado');
+  if(emptyEl) emptyEl.style.display = telhadoRows.length ? 'none':'block';
+  tbody.innerHTML = telhadoRows.map(telhadoRowHtml).join('');
+
+  let areaRealCeramica = 0;
+  const porTipo = {};
+  telhadoRows.forEach(r=>{
+    const fc = fcTelhaQO(r.inclinacao), areaReal = r.area*fc;
+    if(r.tipo==='Cerâmica') areaRealCeramica += areaReal;
+    if(!porTipo[r.tipo]) porTipo[r.tipo]={area:0,areaReal:0};
+    porTipo[r.tipo].area+=r.area; porTipo[r.tipo].areaReal+=areaReal;
+  });
+  const tbodyPT = document.getElementById('tbodyResumoTelha');
+  if(tbodyPT) tbodyPT.innerHTML = Object.keys(porTipo).sort().map(t=>`<tr><td>${escapeXml(t)}</td><td class="num">${fmtNum(porTipo[t].area,2)} m²</td><td class="num">${fmtNum(porTipo[t].areaReal,2)} m²</td></tr>`).join('') || '<tr><td colspan="3" style="text-align:center;color:var(--text-faint)">Sem dados</td></tr>';
+
+  const consumoEl = document.getElementById('telhaConsumo');
+  const percaEl = document.getElementById('telhaPerca');
+  if(consumoEl) consumoEl.value = fmtInput(telhaCeramicaConfig.consumo);
+  if(percaEl) percaEl.value = fmtInput(telhaCeramicaConfig.perca);
+  const totalTelhas = Math.ceil(areaRealCeramica*telhaCeramicaConfig.consumo*(1+telhaCeramicaConfig.perca/100));
+  const totEl = document.getElementById('telhaCeramicaTotal');
+  if(totEl) totEl.textContent = `${totalTelhas} telha(s)`;
+
+  const tbCalha = document.getElementById('tbodyCalhas');
+  if(tbCalha) tbCalha.innerHTML = calhaRows.map(calhaRowHtml).join('');
+  const tbChapim = document.getElementById('tbodyChapins');
+  if(tbChapim) tbChapim.innerHTML = chapimRows.map(r=>linearRowHtml(r,'chapim')).join('');
+  const tbRufo = document.getElementById('tbodyRufos');
+  if(tbRufo) tbRufo.innerHTML = rufoRows.map(r=>linearRowHtml(r,'rufo')).join('');
+
+  const totCalhaComp = calhaRows.reduce((s,r)=>s+r.comp,0);
+  const totCalhaArea = calhaRows.reduce((s,r)=>s+(r.comp*r.largura),0);
+  const totChapim = chapimRows.reduce((s,r)=>s+r.comprimento,0);
+  const totRufo = rufoRows.reduce((s,r)=>s+r.comprimento,0);
+  const setTxt = (id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  setTxt('calhaTotais', `${fmtNum(totCalhaComp,2)} m linear · ${fmtNum(totCalhaArea,2)} m²`);
+  setTxt('chapimTotal', `${fmtNum(totChapim,2)} m`);
+  setTxt('rufoTotal', `${fmtNum(totRufo,2)} m`);
+
+  bindTelhadoEvents();
+  const meta = document.getElementById('qMetaTelhado');
+  if(meta) meta.textContent = `${telhadoRows.length} água(s) de telhado`;
+}
+
+/* ---------- 6. FUNDAÇÃO — SAPATA ---------- */
+function calcSapataAllQO(s, fck){
+  const concreto = s.quantidade*s.largura1*s.largura2*s.altura;
+  const forma = s.quantidade*2*(s.largura1+s.largura2)*s.altura;
+  const escavacao = s.quantidade*(s.largura1+0.3)*s.largura2*s.profundidade;
+  const imperm = s.quantidade*(s.largura1+2*s.largura2)*s.altura;
+  const aux = qoTracoAux(concreto, fck);
+  const supBarras = ((s.altura*s.sup.qtBarras)/12)*s.quantidade;
+  const supKg = supBarras*(QO_BITOLA_TABLE[s.sup.bitola]||0);
+  const infBarras = ((s.altura*s.inf.qtBarras)/12)*s.quantidade;
+  const infKg = infBarras*(QO_BITOLA_TABLE[s.inf.bitola]||0);
+  return {concreto,forma,escavacao,imperm,...aux,supBarras,supKg,infBarras,infKg};
+}
+function calcExtrasSapataQO(s, fck){
+  const c = calcSapataAllQO(s, fck);
+  const lastro = s.quantidade*s.largura1*s.largura2*lastroAlturaFund;
+  const escavacaoManual = c.concreto*0.1;
+  const reaterro = c.escavacao - c.concreto;
+  const formaBaldrame = reapBaldrameFund>0 ? (c.forma/reapBaldrameFund) : 0;
+  return {lastro, escavacaoManual, reaterro, formaBaldrame};
+}
+function addSapataRow(){
+  sapataRows.push({id:nextSapataId++, nome:'Sapata '+(sapataRows.length+1), quantidade:1, largura1:0, largura2:0, altura:0, profundidade:0,
+    sup:{qtBarras:0, bitola:'8 mm'}, inf:{qtBarras:0, bitola:'8 mm'}});
+  renderSapatas(); saveProject();
+}
+function sapataRowHtml(s, idx){
+  const c = calcSapataAllQO(s, fckGlobalFund);
+  const shade = idx%2===1 ? 'style="background:rgba(255,255,255,0.018)"' : '';
+  return `<tr data-sap="${s.id}" ${shade}>
+    <td rowspan="2"><input type="text" class="cell" data-sf="nome" data-sap="${s.id}" value="${escapeAttr(s.nome)}" style="width:100px"></td>
+    <td rowspan="2" class="num"><input type="number" step="1" class="cell small nospin" data-sf="quantidade" data-sap="${s.id}" value="${fmtInput(s.quantidade)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-sf="largura1" data-sap="${s.id}" value="${fmtInput(s.largura1)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-sf="largura2" data-sap="${s.id}" value="${fmtInput(s.largura2)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-sf="altura" data-sap="${s.id}" value="${fmtInput(s.altura)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-sf="profundidade" data-sap="${s.id}" value="${fmtInput(s.profundidade)}"></td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.concreto,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.forma,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.escavacao,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.imperm,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.cimento,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaM3,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaLata,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaM3,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaLata,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.agua,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.aditivo,1)}</td>
+    <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">Superior</td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-saf="sup-qtBarras" data-sap="${s.id}" value="${fmtInput(s.sup.qtBarras)}"></td>
+    <td><select class="cell" data-saf="sup-bitola" data-sap="${s.id}">${qoBitolaOptionsHtml(s.sup.bitola)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.supBarras,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.supKg,2)}</td>
+    <td rowspan="2"><button class="icon-btn" data-sapremove="${s.id}" title="Remover">✕</button></td>
+  </tr>
+  <tr data-sap="${s.id}" ${shade}>
+    <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">Inferior</td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-saf="inf-qtBarras" data-sap="${s.id}" value="${fmtInput(s.inf.qtBarras)}"></td>
+    <td><select class="cell" data-saf="inf-bitola" data-sap="${s.id}">${qoBitolaOptionsHtml(s.inf.bitola)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.infBarras,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.infKg,2)}</td>
+  </tr>`;
+}
+function aggregateAcoSapataQO(){
+  const agg = {}; QO_BITOLA_KEYS.forEach(b=>agg[b]={barras:0,kg:0});
+  sapataRows.forEach(s=>{
+    const c = calcSapataAllQO(s, fckGlobalFund);
+    agg[s.sup.bitola].barras+=c.supBarras; agg[s.sup.bitola].kg+=c.supKg;
+    agg[s.inf.bitola].barras+=c.infBarras; agg[s.inf.bitola].kg+=c.infKg;
+  });
+  return agg;
+}
+function bindSapataEvents(){
+  document.querySelectorAll('#tblSapatas [data-sf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const s = sapataRows.find(x=>String(x.id)===el.dataset.sap);
+      if(!s) return;
+      const f = el.dataset.sf;
+      if(f==='nome') s[f]=el.value;
+      else if(f==='quantidade') s[f]=parseInt(el.value)||0;
+      else s[f]=parseFloat(el.value)||0;
+      renderSapatas(); saveProject();
+    });
+  });
+  document.querySelectorAll('#tblSapatas [data-saf]').forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const s = sapataRows.find(x=>String(x.id)===el.dataset.sap);
+      if(!s) return;
+      const [sub, field] = el.dataset.saf.split('-');
+      if(field==='bitola') s[sub].bitola = el.value; else s[sub].qtBarras = parseFloat(el.value)||0;
+      renderSapatas(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-sapremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ sapataRows = sapataRows.filter(r=>String(r.id)!==btn.dataset.sapremove); renderSapatas(); saveProject(); });
+  });
+  const fckEl = document.getElementById('fckFundacao');
+  if(fckEl) fckEl.addEventListener('change', ()=>{ fckGlobalFund = parseInt(fckEl.value)||20; renderSapatas(); saveProject(); });
+  const lastroEl = document.getElementById('lastroAlturaFund');
+  if(lastroEl) lastroEl.addEventListener('input', ()=>{ lastroAlturaFund = parseFloat(lastroEl.value)||0; renderSapatas(); saveProject(); });
+  const reapEl = document.getElementById('reapBaldrameFund');
+  if(reapEl) reapEl.addEventListener('input', ()=>{ reapBaldrameFund = parseFloat(reapEl.value)||0; renderSapatas(); saveProject(); });
+  document.querySelectorAll('[name="acoModoFund"]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      if(el.value==='manual' && acoResumoFund.mode!=='manual'){
+        const auto = aggregateAcoSapataQO(); const manual={};
+        QO_BITOLA_KEYS.forEach(b=>manual[b]={barras:auto[b].barras, kg:auto[b].kg});
+        acoResumoFund.manual = manual;
+      }
+      acoResumoFund.mode = el.value;
+      renderSapatas(); saveProject();
+    });
+  });
+  document.querySelectorAll('#tblResumoAcoFund [data-arf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const b = el.dataset.bitola;
+      if(!acoResumoFund.manual[b]) acoResumoFund.manual[b]={barras:0,kg:0};
+      acoResumoFund.manual[b][el.dataset.arf] = parseFloat(el.value)||0;
+      renderSapatas(); saveProject();
+    });
+  });
+}
+function renderSapatas(){
+  const tbody = document.getElementById('tbodySapatas');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptySapatas');
+  if(emptyEl) emptyEl.style.display = sapataRows.length ? 'none':'block';
+  tbody.innerHTML = sapataRows.map(sapataRowHtml).join('');
+
+  const fckEl = document.getElementById('fckFundacao');
+  if(fckEl) fckEl.value = fckGlobalFund;
+  const lastroEl = document.getElementById('lastroAlturaFund');
+  if(lastroEl) lastroEl.value = fmtInput(lastroAlturaFund);
+  const reapEl = document.getElementById('reapBaldrameFund');
+  if(reapEl) reapEl.value = fmtInput(reapBaldrameFund);
+  document.querySelectorAll('[name="acoModoFund"]').forEach(el=>{ el.checked = (el.value===acoResumoFund.mode); });
+
+  const agg = aggregateAcoSapataQO();
+  let totalKg = 0;
+  const tbodyAco = document.getElementById('tbodyResumoAcoFund');
+  if(tbodyAco){
+    tbodyAco.innerHTML = QO_BITOLA_KEYS.map(b=>{
+      const isManual = acoResumoFund.mode==='manual';
+      const auto = agg[b]; const man = acoResumoFund.manual[b] || {barras:0,kg:0};
+      const barrasVal = isManual ? man.barras : auto.barras;
+      const kgVal = isManual ? man.kg : auto.kg;
+      totalKg += kgVal;
+      const barrasCell = isManual ? `<td class="num"><input type="number" step="0.01" class="cell small nospin" data-arf="barras" data-bitola="${b}" value="${fmtInput(man.barras)}"></td>` : `<td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(auto.barras,2)}</td>`;
+      const kgCell = isManual ? `<td class="num"><input type="number" step="0.01" class="cell small nospin" data-arf="kg" data-bitola="${b}" value="${fmtInput(man.kg)}"></td>` : `<td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(auto.kg,2)}</td>`;
+      return `<tr><td>${b}</td>${barrasCell}${kgCell}</tr>`;
+    }).join('');
+  }
+  const totKgEl = document.getElementById('acoFundTotalKg');
+  if(totKgEl) totKgEl.textContent = `${fmtNum(totalKg,2)} kg`;
+
+  let totLastro=0, totEscavManual=0, totReaterro=0, totFormaBaldrame=0;
+  const tbodyExtras = document.getElementById('tbodyExtrasFund');
+  if(tbodyExtras){
+    tbodyExtras.innerHTML = sapataRows.map(s=>{
+      const ex = calcExtrasSapataQO(s, fckGlobalFund);
+      totLastro+=ex.lastro; totEscavManual+=ex.escavacaoManual; totReaterro+=ex.reaterro; totFormaBaldrame+=ex.formaBaldrame;
+      return `<tr><td>${escapeXml(s.nome)}</td><td class="num">${fmtNum(ex.lastro,3)}</td><td class="num">${fmtNum(ex.escavacaoManual,2)}</td><td class="num">${fmtNum(ex.reaterro,2)}</td><td class="num">${fmtNum(ex.formaBaldrame,2)}</td></tr>`;
+    }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-faint)">Nenhuma sapata cadastrada</td></tr>';
+  }
+  const setTxt = (id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  setTxt('extrasFundTotais', `Lastro ${fmtNum(totLastro,3)} m³ · Escavação manual ${fmtNum(totEscavManual,2)} m³ · Reaterro ${fmtNum(totReaterro,2)} m³ · Forma baldrame ${fmtNum(totFormaBaldrame,2)} m²`);
+
+  bindSapataEvents();
+  const totC = sapataRows.reduce((s,r)=>s+calcSapataAllQO(r,fckGlobalFund).concreto,0);
+  const meta = document.getElementById('qMetaFundacao');
+  if(meta) meta.textContent = `${sapataRows.length} sapata(s) · ${fmtNum(totC,2)} m³`;
+}
+
+/* ---------- 7/8/9. ELEMENTOS LINEARES (viga baldrame, pilares, vigas) ---------- */
+function calcElementoAllQO(it, fck){
+  const concreto = it.quantidade*it.comprimento*it.largura*it.altura;
+  const forma = it.quantidade*2*(it.comprimento+it.largura)*it.altura;
+  const escavacao = it.quantidade*(it.comprimento+0.3)*it.largura*it.profundidade;
+  const imperm = it.quantidade*(it.comprimento+2*it.largura)*it.altura;
+  const aux = qoTracoAux(concreto, fck);
+  const supBarras = ((it.altura*it.sup.qtBarras)/12)*it.quantidade;
+  const supKg = supBarras*(QO_BITOLA_TABLE[it.sup.bitola]||0);
+  const infBarras = ((it.altura*it.inf.qtBarras)/12)*it.quantidade;
+  const infKg = infBarras*(QO_BITOLA_TABLE[it.inf.bitola]||0);
+  let estribosBarras = 0;
+  if(it.estribo.espacamento>0){
+    estribosBarras = (((it.comprimento/it.estribo.espacamento)*(((it.largura+it.altura+0.05)*2)+0.04))/12)*it.quantidade;
+  }
+  const estribosKg = estribosBarras*(QO_BITOLA_TABLE[it.estribo.bitola]||0);
+  return {concreto,forma,escavacao,imperm,...aux,supBarras,supKg,infBarras,infKg,estribosBarras,estribosKg};
+}
+function addElementoItemQO(key){
+  const st = QO_ELEMENTOS[key];
+  const idGen = key==='vigaBaldrame' ? (()=>nextVigaBaldrameId++) : key==='pilares' ? (()=>nextPilarId++) : (()=>nextVigaId++);
+  st.itens.push({id:idGen(), nome: st.itemPrefix+' '+(st.itens.length+1), quantidade:1, comprimento:0, largura:0, altura:0, profundidade:0,
+    sup:{qtBarras:0, bitola:'8 mm'}, inf:{qtBarras:0, bitola:'8 mm'}, estribo:{bitola:'5 mm', espacamento:0.15}});
+  renderElemento(key); saveProject();
+}
+function elementoRowHtml(key, it, idx, cfg){
+  const st = QO_ELEMENTOS[key];
+  const c = calcElementoAllQO(it, st.fckGlobal);
+  const shade = idx%2===1 ? 'style="background:rgba(255,255,255,0.018)"' : '';
+  return `<tr data-elid="${it.id}" ${shade}>
+    <td rowspan="2"><input type="text" class="cell" data-elf="nome" data-elkey="${key}" data-elid="${it.id}" value="${escapeAttr(it.nome)}" style="width:110px"></td>
+    <td rowspan="2" class="num"><input type="number" step="1" class="cell small nospin" data-elf="quantidade" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.quantidade)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-elf="comprimento" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.comprimento)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-elf="largura" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.largura)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-elf="altura" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.altura)}"></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-elf="profundidade" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.profundidade)}"></td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.concreto,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.forma,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.escavacao,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.imperm,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.cimento,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaM3,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaLata,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaM3,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaLata,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.agua,1)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.aditivo,1)}</td>
+    <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">${cfg.aoLabels[0]}</td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-elaf="sup-qtBarras" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.sup.qtBarras)}"></td>
+    <td><select class="cell" data-elaf="sup-bitola" data-elkey="${key}" data-elid="${it.id}">${qoBitolaOptionsHtml(it.sup.bitola)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.supBarras,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.supKg,2)}</td>
+    <td rowspan="2"><select class="cell" data-elef="bitola" data-elkey="${key}" data-elid="${it.id}">${qoBitolaOptionsHtml(it.estribo.bitola)}</select></td>
+    <td rowspan="2" class="num"><input type="number" step="0.01" class="cell small nospin" data-elef="espacamento" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.estribo.espacamento)}"></td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.estribosBarras,2)}</td>
+    <td rowspan="2" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.estribosKg,2)}</td>
+    <td rowspan="2"><button class="icon-btn" data-elremove="${key}|${it.id}" title="Remover">✕</button></td>
+  </tr>
+  <tr data-elid="${it.id}" ${shade}>
+    <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">${cfg.aoLabels[1]}</td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-elaf="inf-qtBarras" data-elkey="${key}" data-elid="${it.id}" value="${fmtInput(it.inf.qtBarras)}"></td>
+    <td><select class="cell" data-elaf="inf-bitola" data-elkey="${key}" data-elid="${it.id}">${qoBitolaOptionsHtml(it.inf.bitola)}</select></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.infBarras,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.infKg,2)}</td>
+  </tr>`;
+}
+function aggregateAcoElementoQO(key){
+  const st = QO_ELEMENTOS[key];
+  const agg = {}; QO_BITOLA_KEYS.forEach(b=>agg[b]={barras:0,kg:0});
+  st.itens.forEach(it=>{
+    const c = calcElementoAllQO(it, st.fckGlobal);
+    agg[it.sup.bitola].barras+=c.supBarras; agg[it.sup.bitola].kg+=c.supKg;
+    agg[it.inf.bitola].barras+=c.infBarras; agg[it.inf.bitola].kg+=c.infKg;
+    agg[it.estribo.bitola].barras+=c.estribosBarras; agg[it.estribo.bitola].kg+=c.estribosKg;
+  });
+  return agg;
+}
+function bindElementoEvents(key){
+  const st = QO_ELEMENTOS[key];
+  document.querySelectorAll(`#tblElemento-${key} [data-elf][data-elkey="${key}"]`).forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const it = st.itens.find(x=>String(x.id)===el.dataset.elid);
+      if(!it) return;
+      const f = el.dataset.elf;
+      if(f==='nome') it[f]=el.value;
+      else if(f==='quantidade') it[f]=parseInt(el.value)||0;
+      else it[f]=parseFloat(el.value)||0;
+      renderElemento(key); saveProject();
+    });
+  });
+  document.querySelectorAll(`#tblElemento-${key} [data-elaf][data-elkey="${key}"]`).forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const it = st.itens.find(x=>String(x.id)===el.dataset.elid);
+      if(!it) return;
+      const [sub, field] = el.dataset.elaf.split('-');
+      if(field==='bitola') it[sub].bitola = el.value; else it[sub].qtBarras = parseFloat(el.value)||0;
+      renderElemento(key); saveProject();
+    });
+  });
+  document.querySelectorAll(`#tblElemento-${key} [data-elef][data-elkey="${key}"]`).forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const it = st.itens.find(x=>String(x.id)===el.dataset.elid);
+      if(!it) return;
+      if(el.dataset.elef==='bitola') it.estribo.bitola = el.value; else it.estribo.espacamento = parseFloat(el.value)||0;
+      renderElemento(key); saveProject();
+    });
+  });
+  document.querySelectorAll(`[data-elremove^="${key}|"]`).forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const id = btn.dataset.elremove.split('|')[1];
+      st.itens = st.itens.filter(r=>String(r.id)!==id);
+      renderElemento(key); saveProject();
+    });
+  });
+  const fckEl = document.getElementById(`fck-${key}`);
+  if(fckEl) fckEl.addEventListener('change', ()=>{ st.fckGlobal = parseInt(fckEl.value)||20; renderElemento(key); saveProject(); });
+  const lastroEl = document.getElementById(`lastroAltura-${key}`);
+  if(lastroEl) lastroEl.addEventListener('input', ()=>{ st.lastroAltura = parseFloat(lastroEl.value)||0; renderElemento(key); saveProject(); });
+  const reapEl = document.getElementById(`reap-${key}`);
+  if(reapEl) reapEl.addEventListener('input', ()=>{ st.reaproveitamento = parseFloat(reapEl.value)||0; renderElemento(key); saveProject(); });
+  document.querySelectorAll(`[name="acoModo-${key}"]`).forEach(el=>{
+    el.addEventListener('change', ()=>{
+      if(el.value==='manual' && st.acoResumo.mode!=='manual'){
+        const auto = aggregateAcoElementoQO(key); const manual={};
+        QO_BITOLA_KEYS.forEach(b=>manual[b]={barras:auto[b].barras, kg:auto[b].kg});
+        st.acoResumo.manual = manual;
+      }
+      st.acoResumo.mode = el.value;
+      renderElemento(key); saveProject();
+    });
+  });
+  document.querySelectorAll(`#tblResumoAco-${key} [data-arf]`).forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const b = el.dataset.bitola;
+      if(!st.acoResumo.manual[b]) st.acoResumo.manual[b]={barras:0,kg:0};
+      st.acoResumo.manual[b][el.dataset.arf] = parseFloat(el.value)||0;
+      renderElemento(key); saveProject();
+    });
+  });
+}
+function renderElemento(key){
+  const st = QO_ELEMENTOS[key];
+  const cfg = QO_ELEMENTO_CFG[key];
+  const tbody = document.getElementById(`tbodyElemento-${key}`);
+  if(!tbody) return;
+  const emptyEl = document.getElementById(`emptyElemento-${key}`);
+  if(emptyEl) emptyEl.style.display = st.itens.length ? 'none':'block';
+  tbody.innerHTML = st.itens.map((it,idx)=>elementoRowHtml(key,it,idx,cfg)).join('');
+
+  const fckEl = document.getElementById(`fck-${key}`);
+  if(fckEl) fckEl.value = st.fckGlobal;
+  const lastroEl = document.getElementById(`lastroAltura-${key}`);
+  if(lastroEl) lastroEl.value = fmtInput(st.lastroAltura);
+  const reapEl = document.getElementById(`reap-${key}`);
+  if(reapEl) reapEl.value = fmtInput(st.reaproveitamento);
+  document.querySelectorAll(`[name="acoModo-${key}"]`).forEach(el=>{ el.checked = (el.value===st.acoResumo.mode); });
+
+  const agg = aggregateAcoElementoQO(key);
+  let totalKg = 0;
+  const tbodyAco = document.getElementById(`tbodyResumoAco-${key}`);
+  if(tbodyAco){
+    tbodyAco.innerHTML = QO_BITOLA_KEYS.map(b=>{
+      const isManual = st.acoResumo.mode==='manual';
+      const auto = agg[b]; const man = st.acoResumo.manual[b] || {barras:0,kg:0};
+      const kgVal = isManual ? man.kg : auto.kg;
+      totalKg += kgVal;
+      const barrasCell = isManual ? `<td class="num"><input type="number" step="0.01" class="cell small nospin" data-arf="barras" data-bitola="${b}" value="${fmtInput(man.barras)}"></td>` : `<td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(auto.barras,2)}</td>`;
+      const kgCell = isManual ? `<td class="num"><input type="number" step="0.01" class="cell small nospin" data-arf="kg" data-bitola="${b}" value="${fmtInput(man.kg)}"></td>` : `<td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(auto.kg,2)}</td>`;
+      return `<tr><td>${b}</td>${barrasCell}${kgCell}</tr>`;
+    }).join('');
+  }
+  const totKgEl = document.getElementById(`acoTotalKg-${key}`);
+  if(totKgEl) totKgEl.textContent = `${fmtNum(totalKg,2)} kg`;
+
+  const tbodyExtras = document.getElementById(`tbodyExtras-${key}`);
+  if(tbodyExtras){
+    if(cfg.extrasMode==='formaOnly'){
+      let totForma=0;
+      tbodyExtras.innerHTML = st.itens.map(it=>{
+        const c = calcElementoAllQO(it, st.fckGlobal);
+        const formaX = st.reaproveitamento>0 ? (c.forma/st.reaproveitamento) : 0;
+        totForma += formaX;
+        return `<tr><td>${escapeXml(it.nome)}</td><td class="num">${fmtNum(formaX,2)} m²</td></tr>`;
+      }).join('') || '<tr><td colspan="2" style="text-align:center;color:var(--text-faint)">Nenhum item cadastrado</td></tr>';
+      const el = document.getElementById(`extrasTotais-${key}`);
+      if(el) el.textContent = `${cfg.formaLabel}: ${fmtNum(totForma,2)} m²`;
+    } else {
+      let totLastro=0,totEscavManual=0,totReaterro=0,totForma=0;
+      tbodyExtras.innerHTML = st.itens.map(it=>{
+        const c = calcElementoAllQO(it, st.fckGlobal);
+        const lastro = it.quantidade*it.comprimento*it.largura*st.lastroAltura;
+        const escavManual = c.concreto*0.1;
+        const reaterro = c.escavacao - c.concreto;
+        const formaX = st.reaproveitamento>0 ? (c.forma/st.reaproveitamento) : 0;
+        totLastro+=lastro; totEscavManual+=escavManual; totReaterro+=reaterro; totForma+=formaX;
+        return `<tr><td>${escapeXml(it.nome)}</td><td class="num">${fmtNum(lastro,3)}</td><td class="num">${fmtNum(escavManual,2)}</td><td class="num">${fmtNum(reaterro,2)}</td><td class="num">${fmtNum(formaX,2)}</td></tr>`;
+      }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-faint)">Nenhum item cadastrado</td></tr>';
+      const el = document.getElementById(`extrasTotais-${key}`);
+      if(el) el.textContent = `Lastro ${fmtNum(totLastro,3)} m³ · Escavação manual ${fmtNum(totEscavManual,2)} m³ · Reaterro ${fmtNum(totReaterro,2)} m³ · ${cfg.formaLabel} ${fmtNum(totForma,2)} m²`;
+    }
+  }
+
+  bindElementoEvents(key);
+  const totC = st.itens.reduce((s,it)=>s+calcElementoAllQO(it,st.fckGlobal).concreto,0);
+  const meta = document.getElementById(`qMeta-${key}`);
+  if(meta) meta.textContent = `${st.itens.length} item(ns) · ${fmtNum(totC,2)} m³`;
+}
+
+/* ---------- 10. VERGAS E CONTRAVERGAS ---------- */
+function getVergaConfigQO(esqId){
+  if(!vergaConfigByEsqId[esqId]){
+    vergaConfigByEsqId[esqId] = { alturaTijolo:0.11, larguraTijolo:0.09, verga:{qtBarras:1, bitola:'10 mm'}, contraverga:{qtBarras:1, bitola:'8 mm'} };
+  }
+  return vergaConfigByEsqId[esqId];
+}
+function calcVergaAllQO(esq, cfg, fck){
+  const comprimento = esq.largura;
+  const efetivo = comprimento + 0.4*2;
+  const concreto = esq.quantidade*efetivo*2*cfg.alturaTijolo*cfg.larguraTijolo;
+  const forma = (2*(cfg.alturaTijolo+0.4*2))*comprimento*esq.quantidade;
+  const aux = qoTracoAux(concreto, fck);
+  const vergaBarras = ((comprimento*cfg.verga.qtBarras)/12)*esq.quantidade;
+  const vergaKg = vergaBarras*(QO_BITOLA_TABLE[cfg.verga.bitola]||0);
+  const contraBarras = ((comprimento*cfg.contraverga.qtBarras)/12)*esq.quantidade;
+  const contraKg = contraBarras*(QO_BITOLA_TABLE[cfg.contraverga.bitola]||0);
+  return {comprimento, concreto, forma, ...aux, vergaBarras, vergaKg, contraBarras, contraKg};
+}
+function bindVergaEvents(){
+  document.querySelectorAll('#tblVergas [data-vgf]').forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const cfg = getVergaConfigQO(el.dataset.esq);
+      cfg[el.dataset.vgf] = parseFloat(el.value)||0;
+      renderVergas(); saveProject();
+    });
+  });
+  document.querySelectorAll('#tblVergas [data-vgaf]').forEach(el=>{
+    const ev = el.tagName==='SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, ()=>{
+      const cfg = getVergaConfigQO(el.dataset.esq);
+      const [sub, field] = el.dataset.vgaf.split('-');
+      if(field==='bitola') cfg[sub].bitola = el.value; else cfg[sub].qtBarras = parseFloat(el.value)||0;
+      renderVergas(); saveProject();
+    });
+  });
+  const fckEl = document.getElementById('fckVergas');
+  if(fckEl) fckEl.addEventListener('change', ()=>{ fckGlobalVerga = parseInt(fckEl.value)||15; renderVergas(); saveProject(); });
+}
+function renderVergas(){
+  const tbody = document.getElementById('tbodyVergas');
+  if(!tbody) return;
+  let totC=0,totForma=0,totCim=0,totAreiaM3=0,totAreiaLata=0,totBritaM3=0,totBritaLata=0,totAgua=0,totAditivo=0,totKg=0;
+  tbody.innerHTML = esquadriaRows.map((esq,idx)=>{
+    const cfg = getVergaConfigQO(esq.id);
+    const c = calcVergaAllQO(esq, cfg, fckGlobalVerga);
+    totC+=c.concreto; totForma+=c.forma; totCim+=c.cimento; totAreiaM3+=c.areiaM3; totAreiaLata+=c.areiaLata;
+    totBritaM3+=c.britaM3; totBritaLata+=c.britaLata; totAgua+=c.agua; totAditivo+=c.aditivo;
+    const showContra = esq.tipo !== 'Porta';
+    totKg += c.vergaKg + (showContra ? c.contraKg : 0);
+    const shade = idx%2===1 ? 'style="background:rgba(255,255,255,0.018)"' : '';
+    const rowSpan = showContra ? 2 : 1;
+    const secondRow = showContra ? `<tr data-esq="${esq.id}" ${shade}>
+      <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">Contraverga</td>
+      <td class="num"><input type="number" step="1" class="cell small nospin" data-vgaf="contraverga-qtBarras" data-esq="${esq.id}" value="${fmtInput(cfg.contraverga.qtBarras)}"></td>
+      <td><select class="cell" data-vgaf="contraverga-bitola" data-esq="${esq.id}">${qoBitolaOptionsHtml(cfg.contraverga.bitola)}</select></td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.contraBarras,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.contraKg,2)}</td>
+    </tr>` : '';
+    return `<tr data-esq="${esq.id}" ${shade}>
+      <td rowspan="${rowSpan}">${escapeXml(esq.nome)} (${escapeXml(esq.tipo)})</td>
+      <td rowspan="${rowSpan}" class="num">${esq.quantidade}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.comprimento,2)}</td>
+      <td rowspan="${rowSpan}" class="num"><input type="number" step="0.01" class="cell small nospin" data-vgf="alturaTijolo" data-esq="${esq.id}" value="${fmtInput(cfg.alturaTijolo)}"></td>
+      <td rowspan="${rowSpan}" class="num"><input type="number" step="0.01" class="cell small nospin" data-vgf="larguraTijolo" data-esq="${esq.id}" value="${fmtInput(cfg.larguraTijolo)}"></td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.concreto,2)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.forma,2)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.cimento,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaM3,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaLata,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaM3,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaLata,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.agua,1)}</td>
+      <td rowspan="${rowSpan}" class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.aditivo,1)}</td>
+      <td style="font-size:11px;text-transform:uppercase;color:var(--text-faint)">Verga</td>
+      <td class="num"><input type="number" step="1" class="cell small nospin" data-vgaf="verga-qtBarras" data-esq="${esq.id}" value="${fmtInput(cfg.verga.qtBarras)}"></td>
+      <td><select class="cell" data-vgaf="verga-bitola" data-esq="${esq.id}">${qoBitolaOptionsHtml(cfg.verga.bitola)}</select></td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.vergaBarras,2)}</td>
+      <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.vergaKg,2)}</td>
+    </tr>${secondRow}`;
+  }).join('') || '<tr><td colspan="19" style="text-align:center;color:var(--text-faint)">Nenhuma esquadria cadastrada no item 2</td></tr>';
+
+  const emptyEl = document.getElementById('emptyVergas');
+  if(emptyEl) emptyEl.style.display = esquadriaRows.length ? 'none':'block';
+  const fckEl = document.getElementById('fckVergas');
+  if(fckEl) fckEl.value = fckGlobalVerga;
+  const setTxt = (id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  setTxt('vergasTotais', `Concreto ${fmtNum(totC,2)} m³ · Forma ${fmtNum(totForma,2)} m² · Cimento ${fmtNum(totCim,1)} sc · Areia ${fmtNum(totAreiaM3,1)} m³ · Brita ${fmtNum(totBritaM3,1)} m³ · Aço ${fmtNum(totKg,2)} kg`);
+  bindVergaEvents();
+  const meta = document.getElementById('qMetaVergas');
+  if(meta) meta.textContent = `${fmtNum(totKg,2)} kg de aço`;
+}
+
+/* ---------- 11. LAJE ---------- */
+function calcLajeAllQO(it, fck){
+  const concreto = it.quantidade*it.ladoMaior*it.ladoMenor*it.altura;
+  const forma = it.quantidade*it.altura*2*(it.ladoMaior+it.ladoMenor);
+  return {concreto, forma, ...qoTracoAux(concreto, fck)};
+}
+function addLajeRow(){
+  lajeRows.push({id:nextLajeId++, nome:'Laje '+(lajeRows.length+1), quantidade:1, ladoMaior:0, ladoMenor:0, altura:0});
+  renderLaje(); saveProject();
+}
+let fckGlobalLaje = 20;
+function lajeRowHtmlReal(it){
+  const c = calcLajeAllQO(it, fckGlobalLaje);
+  return `<tr data-laje="${it.id}">
+    <td><input type="text" class="cell" data-ljf="nome" data-laje="${it.id}" value="${escapeAttr(it.nome)}" style="width:100px"></td>
+    <td class="num"><input type="number" step="1" class="cell small nospin" data-ljf="quantidade" data-laje="${it.id}" value="${fmtInput(it.quantidade)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ljf="ladoMaior" data-laje="${it.id}" value="${fmtInput(it.ladoMaior)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ljf="ladoMenor" data-laje="${it.id}" value="${fmtInput(it.ladoMenor)}"></td>
+    <td class="num"><input type="number" step="0.01" class="cell small nospin" data-ljf="altura" data-laje="${it.id}" value="${fmtInput(it.altura)}"></td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.concreto,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.forma,2)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.cimento,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaM3,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.areiaLata,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaM3,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.britaLata,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.agua,1)}</td>
+    <td class="num" style="font-family:var(--mono);color:var(--accent)">${fmtNum(c.aditivo,1)}</td>
+    <td><button class="icon-btn" data-ljremove="${it.id}" title="Remover">✕</button></td>
+  </tr>`;
+}
+function bindLajeEvents(){
+  document.querySelectorAll('#tblLaje [data-ljf]').forEach(el=>{
+    el.addEventListener('input', ()=>{
+      const it = lajeRows.find(x=>String(x.id)===el.dataset.laje);
+      if(!it) return;
+      const f = el.dataset.ljf;
+      if(f==='nome') it[f]=el.value;
+      else if(f==='quantidade') it[f]=parseInt(el.value)||0;
+      else it[f]=parseFloat(el.value)||0;
+      renderLaje(); saveProject();
+    });
+  });
+  document.querySelectorAll('[data-ljremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ lajeRows = lajeRows.filter(r=>String(r.id)!==btn.dataset.ljremove); renderLaje(); saveProject(); });
+  });
+  const fckEl = document.getElementById('fckLaje');
+  if(fckEl) fckEl.addEventListener('change', ()=>{ fckGlobalLaje = parseInt(fckEl.value)||20; renderLaje(); saveProject(); });
+}
+function renderLaje(){
+  const tbody = document.getElementById('tbodyLaje');
+  if(!tbody) return;
+  const emptyEl = document.getElementById('emptyLaje');
+  if(emptyEl) emptyEl.style.display = lajeRows.length ? 'none':'block';
+  tbody.innerHTML = lajeRows.map(lajeRowHtmlReal).join('');
+  const fckEl = document.getElementById('fckLaje');
+  if(fckEl) fckEl.value = fckGlobalLaje;
+  let totC=0,totF=0;
+  lajeRows.forEach(it=>{ const c=calcLajeAllQO(it,fckGlobalLaje); totC+=c.concreto; totF+=c.forma; });
+  const setTxt = (id,txt)=>{ const el=document.getElementById(id); if(el) el.textContent=txt; };
+  setTxt('lajeTotais', `Concreto ${fmtNum(totC,2)} m³ · Forma ${fmtNum(totF,2)} m²`);
+  bindLajeEvents();
+  const meta = document.getElementById('qMetaLaje');
+  if(meta) meta.textContent = `${lajeRows.length} laje(s) · ${fmtNum(totC,2)} m³`;
+}
+
+/* ---------- persistência (payload) ---------- */
+function collectQuantitativosExtra(){
+  return {
+    esquadriaRows: esquadriaRows.map(r=>({...r})), nextEsquadriaId,
+    acessorioRows: acessorioRows.map(r=>({...r})), nextAcessorioId,
+    loucaRows: loucaRows.map(r=>({...r})), nextLoucaId,
+    pisoCadRows: pisoCadRows.map(r=>({...r})), nextPisoCadId,
+    forroCadRows: forroCadRows.map(r=>({...r})), nextForroCadId,
+    ambienteRows: ambienteRows.map(r=>({...r})), nextAmbienteId,
+    telhadoRows: telhadoRows.map(r=>({...r})), nextTelhadoId,
+    telhaCeramicaConfig: {...telhaCeramicaConfig},
+    calhaRows: calhaRows.map(r=>({...r})), nextCalhaId,
+    chapimRows: chapimRows.map(r=>({...r})), nextChapimId,
+    rufoRows: rufoRows.map(r=>({...r})), nextRufoId,
+    sapataRows: JSON.parse(JSON.stringify(sapataRows)), nextSapataId,
+    fckGlobalFund, lastroAlturaFund, reapBaldrameFund, acoResumoFund: JSON.parse(JSON.stringify(acoResumoFund)),
+    vigaBaldrameState: JSON.parse(JSON.stringify(vigaBaldrameState)), nextVigaBaldrameId,
+    pilaresState: JSON.parse(JSON.stringify(pilaresState)), nextPilarId,
+    vigasState: JSON.parse(JSON.stringify(vigasState)), nextVigaId,
+    vergaConfigByEsqId: JSON.parse(JSON.stringify(vergaConfigByEsqId)), fckGlobalVerga,
+    lajeRows: lajeRows.map(r=>({...r})), nextLajeId, fckGlobalLaje
+  };
+}
+function resetQuantitativosExtra(){
+  esquadriaRows=[]; nextEsquadriaId=1; acessorioRows=[]; nextAcessorioId=1;
+  loucaRows=[]; nextLoucaId=1;
+  pisoCadRows=[]; nextPisoCadId=1; forroCadRows=[]; nextForroCadId=1; ambienteRows=[]; nextAmbienteId=1;
+  telhadoRows=[]; nextTelhadoId=1; telhaCeramicaConfig={consumo:0,perca:0};
+  calhaRows=[]; nextCalhaId=1; chapimRows=[]; nextChapimId=1; rufoRows=[]; nextRufoId=1;
+  sapataRows=[]; nextSapataId=1; fckGlobalFund=20; lastroAlturaFund=0.05; reapBaldrameFund=3; acoResumoFund={mode:'auto',manual:{}};
+  vigaBaldrameState = qoNovoElementoState('Viga baldrame'); nextVigaBaldrameId=1;
+  pilaresState = qoNovoElementoState('Pilar'); nextPilarId=1;
+  vigasState = qoNovoElementoState('Viga'); nextVigaId=1;
+  QO_ELEMENTOS.vigaBaldrame = vigaBaldrameState; QO_ELEMENTOS.pilares = pilaresState; QO_ELEMENTOS.vigas = vigasState;
+  vergaConfigByEsqId={}; fckGlobalVerga=15;
+  lajeRows=[]; nextLajeId=1; fckGlobalLaje=20;
+}
+function applyQuantitativosExtra(x){
+  resetQuantitativosExtra();
+  if(!x) return;
+  esquadriaRows = x.esquadriaRows || []; nextEsquadriaId = x.nextEsquadriaId || (esquadriaRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  acessorioRows = x.acessorioRows || []; nextAcessorioId = x.nextAcessorioId || (acessorioRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  loucaRows = x.loucaRows || []; nextLoucaId = x.nextLoucaId || (loucaRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  pisoCadRows = x.pisoCadRows || []; nextPisoCadId = x.nextPisoCadId || (pisoCadRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  forroCadRows = x.forroCadRows || []; nextForroCadId = x.nextForroCadId || (forroCadRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  ambienteRows = x.ambienteRows || []; nextAmbienteId = x.nextAmbienteId || (ambienteRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  telhadoRows = x.telhadoRows || []; nextTelhadoId = x.nextTelhadoId || (telhadoRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  telhaCeramicaConfig = x.telhaCeramicaConfig || {consumo:0,perca:0};
+  calhaRows = x.calhaRows || []; nextCalhaId = x.nextCalhaId || (calhaRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  chapimRows = x.chapimRows || []; nextChapimId = x.nextChapimId || (chapimRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  rufoRows = x.rufoRows || []; nextRufoId = x.nextRufoId || (rufoRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  sapataRows = x.sapataRows || []; nextSapataId = x.nextSapataId || (sapataRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  fckGlobalFund = x.fckGlobalFund || 20; lastroAlturaFund = (x.lastroAlturaFund!=null?x.lastroAlturaFund:0.05); reapBaldrameFund = (x.reapBaldrameFund!=null?x.reapBaldrameFund:3);
+  acoResumoFund = x.acoResumoFund || {mode:'auto',manual:{}};
+  vigaBaldrameState = x.vigaBaldrameState || qoNovoElementoState('Viga baldrame'); nextVigaBaldrameId = x.nextVigaBaldrameId || (vigaBaldrameState.itens.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  pilaresState = x.pilaresState || qoNovoElementoState('Pilar'); nextPilarId = x.nextPilarId || (pilaresState.itens.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  vigasState = x.vigasState || qoNovoElementoState('Viga'); nextVigaId = x.nextVigaId || (vigasState.itens.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  QO_ELEMENTOS.vigaBaldrame = vigaBaldrameState; QO_ELEMENTOS.pilares = pilaresState; QO_ELEMENTOS.vigas = vigasState;
+  vergaConfigByEsqId = x.vergaConfigByEsqId || {}; fckGlobalVerga = x.fckGlobalVerga || 15;
+  lajeRows = x.lajeRows || []; nextLajeId = x.nextLajeId || (lajeRows.reduce((m,r)=>Math.max(m,r.id||0),0)+1);
+  fckGlobalLaje = x.fckGlobalLaje || 20;
+}
+
 function setupQuantitativosTab(){
   document.getElementById('btnAddRevestimento').addEventListener('click', addRevestimento);
   document.getElementById('btnAddAlvenaria').addEventListener('click', addAlvenariaRow);
   document.getElementById('btnAddMuro').addEventListener('click', addMuroRow);
+  const bind = (id, fn)=>{ const el=document.getElementById(id); if(el) el.addEventListener('click', fn); };
+  bind('btnAddEsquadria', addEsquadriaRow);
+  bind('btnAddAcessorio', addAcessorioRow);
+  bind('btnAddLouca', addLoucaRow);
+  bind('btnAddPisoCad', addPisoCadRow);
+  bind('btnAddForroCad', addForroCadRow);
+  bind('btnAddAmbiente', addAmbienteRow);
+  bind('btnAddTelhadoRow', addTelhadoRowQO);
+  bind('btnAddCalha', addCalhaRowQO);
+  bind('btnAddChapim', addChapimRowQO);
+  bind('btnAddRufo', addRufoRowQO);
+  bind('btnAddSapata', addSapataRow);
+  bind('btnAddVigaBaldrame', ()=>addElementoItemQO('vigaBaldrame'));
+  bind('btnAddPilar', ()=>addElementoItemQO('pilares'));
+  bind('btnAddViga', ()=>addElementoItemQO('vigas'));
+  bind('btnAddLaje', addLajeRow);
 }
 
 /* ============================================================
@@ -4782,7 +5916,7 @@ async function supaUpsertSistemaGlobal(row){
 }
 
 function collectProjectPayload(){
-  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), estoqueTransferenciasRecebidas: estoqueTransferenciasRecebidas.map(t=>({...t})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})) };
+  return { config: collectConfig(), calendar, orcamento: orcamento.map(r=>({...r})), bdiPercent, compras: compras.map(c=>({...c})), recebimentos: recebimentos.map(r=>({...r})), antecipacao: {...antecipacao}, estoqueConsumos: estoqueConsumos.map(u=>({...u})), estoqueTransferenciasRecebidas: estoqueTransferenciasRecebidas.map(t=>({...t})), composicoesProprias: composicoesProprias.map(c=>({...c})), revestimentos: revestimentos.map(r=>({...r})), alvenariaRows: alvenariaRows.map(r=>({...r})), muroRows: muroRows.map(r=>({...r})), customRevestTipos: [...customRevestTipos], diarioObra: diarioObra.map(d=>({...d})), quantitativosExtra: collectQuantitativosExtra() };
 }
 function saveProject(){ clearTimeout(saveDebounce); saveDebounce = setTimeout(doSaveProject, 500); }
 async function doSaveProject(){
@@ -4796,7 +5930,7 @@ async function doSaveProject(){
   try{
     await supaUpsertProject({
       id: currentProjectId, nome: payload.config.nome,
-      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, estoqueTransferenciasRecebidas: payload.estoqueTransferenciasRecebidas, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra},
+      dados: {config: payload.config, calendar: payload.calendar, orcamento: payload.orcamento, bdiPercent: payload.bdiPercent, compras: payload.compras, recebimentos: payload.recebimentos, antecipacao: payload.antecipacao, estoqueConsumos: payload.estoqueConsumos, estoqueTransferenciasRecebidas: payload.estoqueTransferenciasRecebidas, composicoesProprias: payload.composicoesProprias, revestimentos: payload.revestimentos, alvenariaRows: payload.alvenariaRows, muroRows: payload.muroRows, customRevestTipos: payload.customRevestTipos, diarioObra: payload.diarioObra, quantitativosExtra: payload.quantitativosExtra},
       atualizado_em: new Date().toISOString()
     });
     setSyncStatus('salvo no banco ✓');
@@ -4827,6 +5961,7 @@ function applyProjectPayload(payload){
   muroRows = payload.muroRows || [];
   nextMuroId = muroRows.reduce((m,r)=>Math.max(m,r.id||0), 0) + 1;
   customRevestTipos = payload.customRevestTipos || [];
+  applyQuantitativosExtra(payload.quantitativosExtra);
   diarioObra = payload.diarioObra || [];
   nextDiarioId = diarioObra.reduce((m,d)=>Math.max(m,d.id||0), 0) + 1;
   nextDiarioSubId = diarioObra.reduce((m,d)=>{
@@ -4851,7 +5986,7 @@ async function loadProject(){
       const row = await supaLoadProject(ptr);
       if(row){
         currentProjectId = row.id;
-        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+        applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra, quantitativosExtra: row.dados?.quantitativosExtra});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         return true;
@@ -4862,7 +5997,7 @@ async function loadProject(){
       const row = await supaLoadProject(rows[0].id);
       currentProjectId = row.id;
       try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+      applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra, quantitativosExtra: row.dados?.quantitativosExtra});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       return true;
@@ -4882,7 +6017,7 @@ async function switchProject(id){
   if(!row) return;
   currentProjectId = row.id;
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra});
+  applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra, quantitativosExtra: row.dados?.quantitativosExtra});
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
@@ -4892,7 +6027,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; resetQuantitativosExtra(); diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
   try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
@@ -4922,7 +6057,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; resetQuantitativosExtra(); diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }

@@ -987,6 +987,358 @@ tr[draggable="true"]{cursor:default;}
 
           </div>
         </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 2. Esquadrias e acessórios <span class="qitem-meta" id="qMetaEsquadrias"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">esquadrias</span>Quadro de esquadrias</h3>
+                <button class="btn small primary" id="btnAddEsquadria">+ Adicionar esquadria</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblEsquadrias">
+                <thead><tr>
+                  <th style="width:90px;">Tipo</th><th style="width:80px;">Nome</th><th style="width:90px;">Material</th>
+                  <th style="width:60px;" class="num">Qtd.</th><th style="width:70px;" class="num">Altura (m)</th><th style="width:70px;" class="num">Largura (m)</th>
+                  <th style="width:80px;" class="num">Área unit. (m²)</th><th style="width:80px;" class="num">Área total (m²)</th>
+                  <th style="width:70px;" class="num">Peitoril (m)</th><th style="width:60px;text-align:center;">Pintar</th><th style="width:60px;text-align:center;">Novas</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyEsquadrias"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyEsquadrias" style="display:none;padding:20px;">Nenhuma esquadria cadastrada ainda.</div>
+              <div class="card-row2" style="margin-top:14px;">
+                <div><h3 style="font-size:11px;"><span class="tag">resumo</span>Por tipo</h3><div class="tbl-wrap"><table class="resumo-tbl"><thead><tr><th>Tipo</th><th class="num">Qtd.</th><th class="num">Área</th></tr></thead><tbody id="tbodyResumoEsqTipo"></tbody></table></div></div>
+                <div><h3 style="font-size:11px;"><span class="tag">resumo</span>Por material</h3><div class="tbl-wrap"><table class="resumo-tbl"><thead><tr><th>Material</th><th class="num">Qtd.</th><th class="num">Área</th></tr></thead><tbody id="tbodyResumoEsqMaterial"></tbody></table></div></div>
+              </div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">acessórios</span>Acessórios de esquadrias</h3>
+                <button class="btn small primary" id="btnAddAcessorio">+ Adicionar acessório</button>
+              </div>
+              <p class="desc">O total é calculado a partir da quantidade cadastrada de esquadrias com o mesmo Tipo e Material (item acima).</p>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblAcessorios">
+                <thead><tr><th style="width:90px;">Tipo</th><th style="width:90px;">Material</th><th style="min-width:160px;">Objeto</th><th style="width:70px;" class="num">Qt/unid</th><th style="width:60px;" class="num">Qt. esq.</th><th style="width:80px;" class="num">Qt. total</th><th style="width:80px;" class="num">Valor unit.</th><th style="width:100px;" class="num">Valor total</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyAcessorios"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyAcessorios" style="display:none;padding:20px;">Nenhum acessório cadastrado ainda.</div>
+              <div class="grand-total-row" style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;align-items:center;"><span style="font-size:11px;color:var(--text-faint);text-transform:uppercase;">Total geral de acessórios</span><b id="acessoriosGrandTotal" style="font-family:var(--mono);color:var(--accent);font-size:15px;"></b></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 3. Louças e metais <span class="qitem-meta" id="qMetaLoucas"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">louças</span>Louças e metais</h3>
+                <button class="btn small primary" id="btnAddLouca">+ Adicionar item</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblLoucas">
+                <thead><tr><th style="min-width:150px;">Descrição</th><th style="min-width:110px;">Local</th><th style="width:60px;" class="num">Qt (unid)</th><th style="width:70px;" class="num">Repetições</th><th style="width:60px;" class="num">Total</th><th style="width:80px;" class="num">Valor unit.</th><th style="width:100px;" class="num">Valor total</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyLoucas"></tbody>
+                <tfoot><tr style="font-weight:600;background:var(--bg-inset);"><td colspan="6" style="text-align:right;padding:8px 10px;">TOTAL GERAL</td><td class="num" id="loucasGrandTotal" style="font-family:var(--mono);color:var(--accent);padding:8px 10px;"></td><td></td></tr></tfoot>
+              </table></div>
+              <div class="empty-state" id="emptyLoucas" style="display:none;padding:20px;">Nenhum item cadastrado ainda.</div>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 4. Piso e forro <span class="qitem-meta" id="qMetaPisoForro"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">ambientes</span>Ambientes</h3>
+                <button class="btn small primary" id="btnAddAmbiente">+ Adicionar ambiente</button>
+              </div>
+              <p class="desc">A área do ambiente é usada tanto para o cálculo de piso quanto de forro.</p>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblAmbientes">
+                <thead><tr>
+                  <th style="min-width:110px;">Local</th><th style="width:70px;">Pav.</th><th style="min-width:120px;">Piso</th>
+                  <th style="width:70px;" class="num">Área (m²)</th><th style="width:80px;" class="num">Perímetro (m)</th><th style="width:70px;text-align:center;">Contrapiso</th>
+                  <th style="width:70px;" class="num">Imperm. 1 (m)</th><th style="width:70px;" class="num">Imperm. 2 (m)</th><th style="width:80px;" class="num">Área imperm. (m²)</th>
+                  <th style="min-width:120px;">Forro</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyAmbientes"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyAmbientes" style="display:none;padding:20px;">Nenhum ambiente cadastrado ainda.</div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">cadastro</span>Pisos cadastrados</h3>
+                <button class="btn small primary" id="btnAddPisoCad">+ Adicionar piso</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblPisoCad">
+                <thead><tr><th style="min-width:150px;">Nome</th><th style="width:70px;" class="num">Perca (%)</th><th style="width:90px;" class="num">Área somada</th><th style="width:90px;" class="num">Total c/ perda</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyPisoCad"></tbody>
+              </table></div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">cadastro</span>Forros cadastrados</h3>
+                <button class="btn small primary" id="btnAddForroCad">+ Adicionar forro</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblForroCad">
+                <thead><tr><th style="min-width:150px;">Nome</th><th style="width:70px;" class="num">Perca (%)</th><th style="width:90px;" class="num">Área somada</th><th style="width:90px;" class="num">Total c/ perda</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyForroCad"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 5. Telhado <span class="qitem-meta" id="qMetaTelhado"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row">
+                <h3><span class="tag">telhado</span>Águas de telhado</h3>
+                <button class="btn small primary" id="btnAddTelhadoRow">+ Adicionar água</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblTelhado">
+                <thead><tr><th style="width:100px;">Tipo</th><th style="min-width:100px;">Local</th><th style="width:70px;" class="num">Área (m²)</th><th style="width:80px;" class="num">Inclinação (%)</th><th style="width:70px;" class="num">Fc</th><th style="width:80px;" class="num">Área real (m²)</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="tbodyTelhado"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyTelhado" style="display:none;padding:20px;">Nenhuma água de telhado cadastrada ainda.</div>
+              <div class="tbl-wrap" style="margin-top:12px;"><table class="resumo-tbl"><thead><tr><th>Tipo</th><th class="num">Área</th><th class="num">Área real</th></tr></thead><tbody id="tbodyResumoTelha"></tbody></table></div>
+            </div>
+            <div class="qsection">
+              <h3><span class="tag">telha cerâmica</span>Consumo de telha cerâmica</h3>
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <label style="font-size:11px;color:var(--text-faint);">Consumo (telhas/m²)<br><input type="number" step="0.01" class="cell small nospin" id="telhaConsumo"></label>
+                <label style="font-size:11px;color:var(--text-faint);">Perca (%)<br><input type="number" step="0.5" class="cell small nospin" id="telhaPerca"></label>
+                <div style="margin-left:auto;font-size:11px;color:var(--text-faint);">Total de telhas<br><b id="telhaCeramicaTotal" style="font-family:var(--mono);color:var(--accent);font-size:15px;"></b></div>
+              </div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row"><h3><span class="tag">calhas</span>Calhas</h3><button class="btn small primary" id="btnAddCalha">+ Adicionar calha</button></div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblCalhas"><thead><tr><th style="min-width:120px;">Local</th><th style="width:80px;" class="num">Comp. (m)</th><th style="width:80px;" class="num">Largura (m)</th><th style="width:80px;" class="num">Área real (m²)</th><th style="width:34px;"></th></tr></thead><tbody id="tbodyCalhas"></tbody></table></div>
+              <p class="desc" id="calhaTotais"></p>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row"><h3><span class="tag">chapins</span>Chapins</h3><button class="btn small primary" id="btnAddChapim">+ Adicionar chapim</button></div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblChapins"><thead><tr><th style="min-width:150px;">Local</th><th style="width:90px;" class="num">Comprimento (m)</th><th style="width:34px;"></th></tr></thead><tbody id="tbodyChapins"></tbody></table></div>
+              <p class="desc" id="chapimTotal"></p>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row"><h3><span class="tag">rufos</span>Rufos</h3><button class="btn small primary" id="btnAddRufo">+ Adicionar rufo</button></div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblRufos"><thead><tr><th style="min-width:150px;">Local</th><th style="width:90px;" class="num">Comprimento (m)</th><th style="width:34px;"></th></tr></thead><tbody id="tbodyRufos"></tbody></table></div>
+              <p class="desc" id="rufoTotal"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 6. Fundação — Sapata <span class="qitem-meta" id="qMetaFundacao"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">sapatas</span>Sapatas</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fckFundacao"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+                <button class="btn small primary" id="btnAddSapata" style="margin-left:auto;">+ Adicionar sapata</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblSapatas">
+                <thead><tr>
+                  <th style="min-width:90px;">Sapata</th><th style="width:56px;" class="num">Qtd.</th><th style="width:60px;" class="num">Larg. 1</th><th style="width:60px;" class="num">Larg. 2</th><th style="width:60px;" class="num">Altura</th><th style="width:60px;" class="num">Prof.</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:70px;" class="num">Escavação</th><th style="width:70px;" class="num">Imperm.</th>
+                  <th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th>
+                  <th style="width:70px;">Sessão</th><th style="width:50px;" class="num">Qt.barras</th><th style="width:80px;">Bitola</th><th style="width:70px;" class="num">Barras (m)</th><th style="width:60px;" class="num">Kg</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodySapatas"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptySapatas" style="display:none;padding:20px;">Nenhuma sapata cadastrada ainda.</div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;">
+                <h3><span class="tag">resumo</span>Resumo de aço por bitola</h3>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModoFund" value="auto"> Automático</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModoFund" value="manual"> Manual</label>
+              </div>
+              <div class="tbl-wrap" id="tblResumoAcoFund"><table class="resumo-tbl"><thead><tr><th>Bitola</th><th class="num">Barras (m)</th><th class="num">Kg</th></tr></thead><tbody id="tbodyResumoAcoFund"></tbody></table></div>
+              <div class="grand-total-row" style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;"><span style="font-size:11px;color:var(--text-faint);text-transform:uppercase;">Total geral de aço</span><b id="acoFundTotalKg" style="font-family:var(--mono);color:var(--accent);"></b></div>
+            </div>
+            <div class="qsection">
+              <h3><span class="tag">extras</span>Lastro, escavação manual, reaterro e forma do baldrame</h3>
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <label style="font-size:11px;color:var(--text-faint);">Altura do lastro (m)<br><input type="number" step="0.01" class="cell small nospin" id="lastroAlturaFund"></label>
+                <label style="font-size:11px;color:var(--text-faint);">Reaproveitamento (usos)<br><input type="number" step="1" class="cell small nospin" id="reapBaldrameFund"></label>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Sapata</th><th class="num">Lastro (m³)</th><th class="num">Escav. manual (m³)</th><th class="num">Reaterro (m³)</th><th class="num">Forma baldrame (m²)</th></tr></thead><tbody id="tbodyExtrasFund"></tbody></table></div>
+              <p class="desc" id="extrasFundTotais"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 7. Viga baldrame <span class="qitem-meta" id="qMeta-vigaBaldrame"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">viga baldrame</span>Viga baldrame</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fck-vigaBaldrame"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+                <button class="btn small primary" id="btnAddVigaBaldrame" style="margin-left:auto;">+ Adicionar item</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblElemento-vigaBaldrame">
+                <thead><tr>
+                  <th style="min-width:100px;">Viga baldrame</th><th style="width:56px;" class="num">Qtd.</th><th style="width:64px;" class="num">Compr.</th><th style="width:60px;" class="num">Larg.</th><th style="width:60px;" class="num">Altura</th><th style="width:60px;" class="num">Prof.</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:70px;" class="num">Escavação</th><th style="width:70px;" class="num">Imperm.</th>
+                  <th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th>
+                  <th style="width:70px;">Sessão</th><th style="width:50px;" class="num">Qt.barras</th><th style="width:80px;">Bitola</th><th style="width:70px;" class="num">Barras (m)</th><th style="width:60px;" class="num">Kg</th>
+                  <th style="width:80px;">Estribo</th><th style="width:70px;" class="num">Espaç. (m)</th><th style="width:70px;" class="num">Estr. (m)</th><th style="width:60px;" class="num">Estr. Kg</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyElemento-vigaBaldrame"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyElemento-vigaBaldrame" style="display:none;padding:20px;">Nenhum item cadastrado ainda.</div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;">
+                <h3><span class="tag">resumo</span>Resumo de aço por bitola</h3>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-vigaBaldrame" value="auto"> Automático</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-vigaBaldrame" value="manual"> Manual</label>
+              </div>
+              <div class="tbl-wrap" id="tblResumoAco-vigaBaldrame"><table class="resumo-tbl"><thead><tr><th>Bitola</th><th class="num">Barras (m)</th><th class="num">Kg</th></tr></thead><tbody id="tbodyResumoAco-vigaBaldrame"></tbody></table></div>
+              <div class="grand-total-row" style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;"><span style="font-size:11px;color:var(--text-faint);text-transform:uppercase;">Total geral de aço</span><b id="acoTotalKg-vigaBaldrame" style="font-family:var(--mono);color:var(--accent);"></b></div>
+            </div>
+            <div class="qsection">
+              <h3><span class="tag">extras</span>Forma de tábuas do baldrame (m²) e itens auxiliares</h3>
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <label style="font-size:11px;color:var(--text-faint);">Altura do lastro (m)<br><input type="number" step="0.01" class="cell small nospin" id="lastroAltura-vigaBaldrame"></label>
+                <label style="font-size:11px;color:var(--text-faint);">Reaproveitamento (usos)<br><input type="number" step="1" class="cell small nospin" id="reap-vigaBaldrame"></label>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num">Lastro (m³)</th><th class="num">Escav. manual (m³)</th><th class="num">Reaterro (m³)</th><th class="num">Forma de tábuas do baldrame (m²)</th></tr></thead><tbody id="tbodyExtras-vigaBaldrame"></tbody></table></div>
+              <p class="desc" id="extrasTotais-vigaBaldrame"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 8. Pilares <span class="qitem-meta" id="qMeta-pilares"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">pilares</span>Pilares</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fck-pilares"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+                <button class="btn small primary" id="btnAddPilar" style="margin-left:auto;">+ Adicionar item</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblElemento-pilares">
+                <thead><tr>
+                  <th style="min-width:100px;">Pilares</th><th style="width:56px;" class="num">Qtd.</th><th style="width:64px;" class="num">Compr.</th><th style="width:60px;" class="num">Larg.</th><th style="width:60px;" class="num">Altura</th><th style="width:60px;" class="num">Prof.</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:70px;" class="num">Escavação</th><th style="width:70px;" class="num">Imperm.</th>
+                  <th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th>
+                  <th style="width:70px;">Sessão</th><th style="width:50px;" class="num">Qt.barras</th><th style="width:80px;">Bitola</th><th style="width:70px;" class="num">Barras (m)</th><th style="width:60px;" class="num">Kg</th>
+                  <th style="width:80px;">Estribo</th><th style="width:70px;" class="num">Espaç. (m)</th><th style="width:70px;" class="num">Estr. (m)</th><th style="width:60px;" class="num">Estr. Kg</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyElemento-pilares"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyElemento-pilares" style="display:none;padding:20px;">Nenhum item cadastrado ainda.</div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;">
+                <h3><span class="tag">resumo</span>Resumo de aço por bitola</h3>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-pilares" value="auto"> Automático</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-pilares" value="manual"> Manual</label>
+              </div>
+              <div class="tbl-wrap" id="tblResumoAco-pilares"><table class="resumo-tbl"><thead><tr><th>Bitola</th><th class="num">Barras (m)</th><th class="num">Kg</th></tr></thead><tbody id="tbodyResumoAco-pilares"></tbody></table></div>
+              <div class="grand-total-row" style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;"><span style="font-size:11px;color:var(--text-faint);text-transform:uppercase;">Total geral de aço</span><b id="acoTotalKg-pilares" style="font-family:var(--mono);color:var(--accent);"></b></div>
+            </div>
+            <div class="qsection">
+              <h3><span class="tag">extras</span>Forma de tábuas dos pilares (m²) e itens auxiliares</h3>
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                
+                <label style="font-size:11px;color:var(--text-faint);">Reaproveitamento (usos)<br><input type="number" step="1" class="cell small nospin" id="reap-pilares"></label>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num">Forma de tábuas dos pilares (m²)</th></tr></thead><tbody id="tbodyExtras-pilares"></tbody></table></div>
+              <p class="desc" id="extrasTotais-pilares"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 9. Vigas <span class="qitem-meta" id="qMeta-vigas"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">vigas</span>Vigas</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fck-vigas"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+                <button class="btn small primary" id="btnAddViga" style="margin-left:auto;">+ Adicionar item</button>
+              </div>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblElemento-vigas">
+                <thead><tr>
+                  <th style="min-width:100px;">Vigas</th><th style="width:56px;" class="num">Qtd.</th><th style="width:64px;" class="num">Compr.</th><th style="width:60px;" class="num">Larg.</th><th style="width:60px;" class="num">Altura</th><th style="width:60px;" class="num">Prof.</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:70px;" class="num">Escavação</th><th style="width:70px;" class="num">Imperm.</th>
+                  <th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th>
+                  <th style="width:70px;">Sessão</th><th style="width:50px;" class="num">Qt.barras</th><th style="width:80px;">Bitola</th><th style="width:70px;" class="num">Barras (m)</th><th style="width:60px;" class="num">Kg</th>
+                  <th style="width:80px;">Estribo</th><th style="width:70px;" class="num">Espaç. (m)</th><th style="width:70px;" class="num">Estr. (m)</th><th style="width:60px;" class="num">Estr. Kg</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyElemento-vigas"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyElemento-vigas" style="display:none;padding:20px;">Nenhum item cadastrado ainda.</div>
+            </div>
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;">
+                <h3><span class="tag">resumo</span>Resumo de aço por bitola</h3>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-vigas" value="auto"> Automático</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:11px;"><input type="radio" name="acoModo-vigas" value="manual"> Manual</label>
+              </div>
+              <div class="tbl-wrap" id="tblResumoAco-vigas"><table class="resumo-tbl"><thead><tr><th>Bitola</th><th class="num">Barras (m)</th><th class="num">Kg</th></tr></thead><tbody id="tbodyResumoAco-vigas"></tbody></table></div>
+              <div class="grand-total-row" style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;"><span style="font-size:11px;color:var(--text-faint);text-transform:uppercase;">Total geral de aço</span><b id="acoTotalKg-vigas" style="font-family:var(--mono);color:var(--accent);"></b></div>
+            </div>
+            <div class="qsection">
+              <h3><span class="tag">extras</span>Forma de tábuas das vigas (m²) e itens auxiliares</h3>
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <label style="font-size:11px;color:var(--text-faint);">Altura do lastro (m)<br><input type="number" step="0.01" class="cell small nospin" id="lastroAltura-vigas"></label>
+                <label style="font-size:11px;color:var(--text-faint);">Reaproveitamento (usos)<br><input type="number" step="1" class="cell small nospin" id="reap-vigas"></label>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num">Lastro (m³)</th><th class="num">Escav. manual (m³)</th><th class="num">Reaterro (m³)</th><th class="num">Forma de tábuas das vigas (m²)</th></tr></thead><tbody id="tbodyExtras-vigas"></tbody></table></div>
+              <p class="desc" id="extrasTotais-vigas"></p>
+            </div>
+          </div>
+        </details>
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 10. Vergas e contravergas <span class="qitem-meta" id="qMetaVergas"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">vergas</span>Vergas e contravergas</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fckVergas"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+              </div>
+              <p class="desc">Geradas automaticamente a partir do Quadro de esquadrias (item 2). Portas recebem apenas Verga; os demais tipos recebem Verga e Contraverga.</p>
+              <div class="tbl-wrap" style="overflow-x:auto;"><table class="qtbl zebra" id="tblVergas">
+                <thead><tr>
+                  <th style="min-width:120px;">Esquadria</th><th style="width:56px;" class="num">Qtd.</th><th style="width:70px;" class="num">Compr.</th><th style="width:70px;" class="num">Alt. tijolo</th><th style="width:70px;" class="num">Larg. tijolo</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th>
+                  <th style="width:80px;">Sessão</th><th style="width:60px;" class="num">Qt.barras</th><th style="width:80px;">Bitola</th><th style="width:70px;" class="num">Barras (m)</th><th style="width:60px;" class="num">Kg</th>
+                </tr></thead>
+                <tbody id="tbodyVergas"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyVergas" style="display:none;padding:20px;">Cadastre esquadrias no item 2 para gerar vergas e contravergas.</div>
+              <p class="desc" id="vergasTotais"></p>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem">
+          <summary class="qitem-summary"><span class="chev">▸</span> 11. Laje <span class="qitem-meta" id="qMetaLaje"></span></summary>
+          <div class="qitem-body">
+            <div class="qsection">
+              <div class="toolbar-row" style="gap:16px;flex-wrap:wrap;">
+                <h3><span class="tag">laje</span>Laje</h3>
+                <label style="font-size:11px;color:var(--text-faint);">Fck do traço<br><select class="cell" id="fckLaje"><option value="15">15</option><option value="20">20</option><option value="25">25</option></select></label>
+                <button class="btn small primary" id="btnAddLaje" style="margin-left:auto;">+ Adicionar laje</button>
+              </div>
+              <div class="tbl-wrap"><table class="qtbl zebra" id="tblLaje">
+                <thead><tr>
+                  <th style="min-width:90px;">Laje</th><th style="width:56px;" class="num">Qtd.</th><th style="width:70px;" class="num">Lado maior</th><th style="width:70px;" class="num">Lado menor</th><th style="width:60px;" class="num">Altura</th>
+                  <th style="width:70px;" class="num">Concreto</th><th style="width:70px;" class="num">Forma</th><th style="width:60px;" class="num">Cimento</th><th style="width:60px;" class="num">Areia m³</th><th style="width:60px;" class="num">Areia lata</th><th style="width:60px;" class="num">Brita m³</th><th style="width:60px;" class="num">Brita lata</th><th style="width:60px;" class="num">Água</th><th style="width:60px;" class="num">Aditivo</th><th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyLaje"></tbody>
+              </table></div>
+              <div class="empty-state" id="emptyLaje" style="display:none;padding:20px;">Nenhuma laje cadastrada ainda.</div>
+              <p class="desc" id="lajeTotais"></p>
+            </div>
+          </div>
+        </details>
       </div>
 
       <!-- ===================== ESCRITÓRIO ===================== -->

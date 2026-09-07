@@ -17,9 +17,10 @@ const TIPOS_COMPRA = ['Material', 'Mão de obra', 'Equipamento', 'Extra'];
 const FORMAS_PAGTO = ['PIX', 'Cartão de crédito', 'Cartão de débito', 'Espécie'];
 
 module.exports = async (req, res) => {
+  let update;
   try {
     if (req.method !== 'POST') { res.status(200).send('ok'); return; }
-    const update = req.body;
+    update = req.body;
 
     if (update.callback_query) {
       await handleCallback(update.callback_query);
@@ -29,6 +30,11 @@ module.exports = async (req, res) => {
     res.status(200).send('ok');
   } catch (err) {
     console.error('Erro no webhook:', err);
+    const chatId = update && (update.message?.chat?.id || update.callback_query?.message?.chat?.id);
+    if (chatId) {
+      try { await sendText(chatId, `⚠️ Deu um erro aqui: ${err.message}\n\nManda /nova_compra pra tentar de novo.`); }
+      catch (e) { console.error('Falha ao avisar erro:', e); }
+    }
     res.status(200).send('ok'); // sempre 200 pro Telegram não ficar reenviando
   }
 };

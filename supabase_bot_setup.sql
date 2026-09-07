@@ -5,12 +5,16 @@
 create table if not exists public.bot_sessions (
   chat_id bigint primary key,
   step text not null default 'inicio',
-  -- 'inicio' | 'aguardando_obra' | 'aguardando_tipo' | 'aguardando_busca_item' | 'aguardando_escolha_item' | 'aguardando_foto' | 'aguardando_confirmacao'
+  -- 'inicio' | 'aguardando_obra' | 'aguardando_tipo' | 'aguardando_busca_item' | 'aguardando_escolha_item' |
+  -- 'aguardando_forma_pagto' | 'aguardando_parcelas' | 'aguardando_banco' | 'aguardando_foto' | 'aguardando_confirmacao'
   projeto_id uuid,
   projeto_nome text,
   tipo text,
   orc_id text,
   orc_label text,
+  forma_pagto text,
+  parcelas integer,
+  banco text,
   itens_encontrados jsonb,
   extraido jsonb,
   foto_path text,
@@ -20,6 +24,12 @@ create table if not exists public.bot_sessions (
 alter table public.bot_sessions enable row level security;
 drop policy if exists "acesso anon completo" on public.bot_sessions;
 create policy "acesso anon completo" on public.bot_sessions for all to anon using (true) with check (true);
+
+-- Se você já rodou uma versão anterior deste arquivo (sem forma de pagamento/parcelas/banco),
+-- rode as linhas abaixo pra atualizar a tabela existente sem perder dados:
+alter table public.bot_sessions add column if not exists forma_pagto text;
+alter table public.bot_sessions add column if not exists parcelas integer;
+alter table public.bot_sessions add column if not exists banco text;
 
 -- Fila de compras lançadas pelo bot, esperando serem importadas pelo app.
 -- Isso evita o bot escrever direto no JSON grande do projeto (que o app também edita).

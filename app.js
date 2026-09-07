@@ -4170,6 +4170,10 @@ function setupQuantitativosTab(){
   bind('btnAddViga', ()=>addElementoItemQO('vigas'));
   bind('btnAddLaje', addLajeRow);
 }
+function setupComprasTelegram(){
+  const btn = document.getElementById('btnRefreshTelegramPend');
+  if(btn) btn.addEventListener('click', refreshComprasPendentesTelegram);
+}
 
 /* ============================================================
    15e. DIÁRIO DE OBRA (por obra)
@@ -5911,6 +5915,68 @@ async function supaUpsertAcabamentoSistema(row){
   return supaRequest('acabamentos_sistema', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
 }
 async function supaListProjectsFull(){ return supaRequest('projetos?select=id,nome,dados,atualizado_em', {method:'GET'}); }
+async function supaListComprasPendentes(projetoId){ return supaRequest(`compras_pendentes?projeto_id=eq.${projetoId}&status=eq.pendente&select=*&order=criado_em.desc`, {method:'GET'}); }
+async function supaMarcarCompraPendente(id, status){ return supaRequest(`compras_pendentes?id=eq.${id}`, {method:'PATCH', headers:{...SUPA_HEADERS,'Prefer':'return=minimal'}, body: JSON.stringify({status})}); }
+async function supaSignedUrlNotaFiscal(path){
+  try{
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/notas-fiscais/${path}`, {method:'POST', headers: SUPA_HEADERS, body: JSON.stringify({expiresIn:3600})});
+    if(!res.ok) return null;
+    const r = await res.json();
+    return r && r.signedURL ? SUPABASE_URL + r.signedURL : null;
+  }catch(e){ return null; }
+}
+async function refreshComprasPendentesTelegram(){
+  const card = document.getElementById('cardComprasTelegram');
+  const list = document.getElementById('telegramPendList');
+  const countEl = document.getElementById('telegramPendCount');
+  if(!card || !list || !currentProjectId) return;
+  let pend = [];
+  try{ pend = await supaListComprasPendentes(currentProjectId); }
+  catch(e){ console.error('Compras pendentes:', e); return; }
+  if(!pend.length){ card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  countEl.textContent = pend.length;
+  list.innerHTML = pend.map(p=>`
+    <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;" data-pend="${p.id}">
+      <div style="flex:1;min-width:220px;font-size:12.5px;line-height:1.7;">
+        <div><b>${escapeXml(p.orc_label||'(sem item vinculado)')}</b> · ${escapeXml(p.tipo||'')}</div>
+        <div>Loja: ${escapeXml(p.loja||'—')} · Nº nota: ${escapeXml(p.numero_nota||'—')} · Data: ${p.data_nota||'—'}</div>
+        <div>Pagto: ${escapeXml(p.forma_pagto||'—')}${p.forma_pagto==='Cartão de crédito'?` (${p.parcelas}x)`:''} · Banco: ${escapeXml(p.banco||'—')}</div>
+        <div style="font-family:var(--mono);color:var(--accent);">R$ ${fmtNum(p.valor_total||0,2)}</div>
+        <div style="color:var(--text-faint);">${escapeXml(p.descricao||'')}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <a href="#" data-pendfoto="${p.id}" data-fotopath="${escapeAttr(p.foto_path||'')}" style="font-size:11px;">Ver foto da nota</a>
+        <button class="btn small primary" data-pendimport="${p.id}">Importar</button>
+        <button class="btn small" data-penddiscard="${p.id}">Descartar</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-pendfoto]').forEach(a=>{
+    a.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      const path = a.dataset.fotopath;
+      if(!path) return;
+      const url = await supaSignedUrlNotaFiscal(path);
+      if(url) window.open(url, '_blank');
+    });
+  });
+  list.querySelectorAll('[data-pendimport]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const p = pend.find(x=>String(x.id)===btn.dataset.pendimport);
+      if(!p) return;
+      compras.push({id:nextCompraId++, orcId:p.orc_id||null, tipo:p.tipo||'Material', data:p.data_nota||toISO(new Date()), loja:p.loja||'', notaNum:p.numero_nota||'', formaPagto:p.forma_pagto||'PIX', parcelas:p.parcelas||1, banco:p.banco||'', descricao:p.descricao||'', quantidade:1, unidade:'', valorUnid:p.valor_total||0, valorTotal:p.valor_total||0, entrega:'Recebido', dataEntregaPrevista:''});
+      await supaMarcarCompraPendente(p.id, 'importada');
+      renderCompras(); saveProject(); refreshComprasPendentesTelegram();
+    });
+  });
+  list.querySelectorAll('[data-penddiscard]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!confirm('Descartar esta compra lançada pelo bot? Essa ação não pode ser desfeita.')) return;
+      await supaMarcarCompraPendente(btn.dataset.penddiscard, 'descartada');
+      refreshComprasPendentesTelegram();
+    });
+  });
+}
 async function supaUpsertSistemaGlobal(row){
   return supaRequest('sistema_global', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
 }
@@ -5989,6 +6055,7 @@ async function loadProject(){
         applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra, quantitativosExtra: row.dados?.quantitativosExtra});
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
+        refreshComprasPendentesTelegram();
         return true;
       }
     }
@@ -6000,6 +6067,7 @@ async function loadProject(){
       applyProjectPayload({config: row.dados?.config || {nome: row.nome}, calendar: row.dados?.calendar, orcamento: row.dados?.orcamento, bdiPercent: row.dados?.bdiPercent, compras: row.dados?.compras, recebimentos: row.dados?.recebimentos, antecipacao: row.dados?.antecipacao, estoqueConsumos: row.dados?.estoqueConsumos, estoqueTransferenciasRecebidas: row.dados?.estoqueTransferenciasRecebidas, composicoesProprias: row.dados?.composicoesProprias, revestimentos: row.dados?.revestimentos, alvenariaRows: row.dados?.alvenariaRows, muroRows: row.dados?.muroRows, customRevestTipos: row.dados?.customRevestTipos, diarioObra: row.dados?.diarioObra, quantitativosExtra: row.dados?.quantitativosExtra});
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
+      refreshComprasPendentesTelegram();
       return true;
     }
   }catch(e){
@@ -6021,6 +6089,7 @@ async function switchProject(id){
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
+  refreshComprasPendentesTelegram();
 }
 async function createNewProject(){
   const nome = prompt('Nome da nova obra:', 'Nova obra');
@@ -6139,6 +6208,7 @@ function setupTopbar(){
   setupFluxoCaixaTab();
   setupComposicoesTab();
   setupQuantitativosTab();
+  setupComprasTelegram();
   setupEscritorioTab();
   setupDepositoTab();
   setupPatrimonioTab();

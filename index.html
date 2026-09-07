@@ -662,6 +662,14 @@ tr[draggable="true"]{cursor:default;}
 
       <!-- ===================== ABAS EM CONSTRUÇÃO ===================== -->
       <div class="panel" id="panel-compras">
+        <div class="card" id="cardComprasTelegram" style="display:none;">
+          <div class="toolbar-row">
+            <h2 style="margin:0;"><span class="tag">telegram</span>Compras lançadas pelo bot <span id="telegramPendCount" class="badge warn"></span></h2>
+            <button class="btn small" id="btnRefreshTelegramPend">Atualizar</button>
+          </div>
+          <p class="desc">Lançadas pelo @NotasQorbanBot, aguardando revisão. Confira os dados extraídos da nota antes de importar.</p>
+          <div id="telegramPendList"></div>
+        </div>
         <div class="card">
           <div class="toolbar-row">
             <h2 style="margin:0;"><span class="tag">compras</span>Compras realizadas</h2>

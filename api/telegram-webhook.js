@@ -32,7 +32,7 @@ module.exports = async (req, res) => {
     console.error('Erro no webhook:', err);
     const chatId = update && (update.message?.chat?.id || update.callback_query?.message?.chat?.id);
     if (chatId) {
-      try { await sendText(chatId, `⚠️ Deu um erro aqui: ${err.message}\n\nManda /nova_compra pra tentar de novo.`); }
+      try { await sendText(chatId, `⚠️ Deu um erro aqui: ${err.message}\n\nManda /nova pra tentar de novo.`); }
       catch (e) { console.error('Falha ao avisar erro:', e); }
     }
     res.status(200).send('ok'); // sempre 200 pro Telegram não ficar reenviando
@@ -106,7 +106,7 @@ async function handleMessage(msg) {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
 
-  if (text === '/start' || text === '/nova_compra' || text === '/novacompra') {
+  if (text === '/start' || text === '/nova' || text === '/nova_compra' || text === '/novacompra') {
     await clearSession(chatId);
     const projetos = await listProjetos();
     if (!projetos.length) return sendText(chatId, 'Nenhuma obra cadastrada no sistema ainda.');
@@ -117,7 +117,7 @@ async function handleMessage(msg) {
 
   const session = await getSession(chatId);
   if (!session) {
-    return sendText(chatId, 'Manda /nova_compra para começar a lançar uma compra.');
+    return sendText(chatId, 'Manda /nova para começar a lançar uma compra.');
   }
 
   if (session.step === 'aguardando_busca_item' && text) {
@@ -150,7 +150,7 @@ async function handleMessage(msg) {
     return sendText(chatId, '📷 Ainda preciso da foto da nota fiscal pra continuar.');
   }
 
-  return sendText(chatId, 'Manda /nova_compra pra começar do zero.');
+  return sendText(chatId, 'Manda /nova pra começar do zero.');
 }
 
 async function irParaEscolhaBanco(chatId, session) {
@@ -172,7 +172,7 @@ async function handleCallback(cq) {
   await answerCallback(cq.id);
 
   const session = await getSession(chatId);
-  if (!session) return sendText(chatId, 'Sessão expirada. Manda /nova_compra de novo.');
+  if (!session) return sendText(chatId, 'Sessão expirada. Manda /nova de novo.');
 
   if (action === 'obra') {
     const projetos = await listProjetos();
@@ -213,21 +213,26 @@ async function handleCallback(cq) {
       const b = bancos.find(x => String(x.id) === value);
       await saveSession(chatId, { banco: b ? contaBancariaLabel(b) : '', step: 'aguardando_foto' });
     }
-    return sendText(chatId, '📷 Agora manda a foto da nota fiscal.');
+    return sendText(chatId, '📷 Agora manda a foto da nota fiscal. Se a nota tiver mais de uma folha, manda uma foto de cada vez — eu vou perguntando se tem mais.');
+  }
+
+  if (action === 'maispag') {
+    if (value === 'sim') return sendText(chatId, '📷 Manda a foto da próxima folha.');
+    if (value === 'nao') return mostrarResumoFinal(chatId, session);
   }
 
   if (action === 'confirmar') {
-    if (value === 'sim') return gravarCompraPendente(chatId, session);
-    if (value === 'refazer_foto') {
-      await saveSession(chatId, { step: 'aguardando_foto', extraido: null, foto_path: null });
-      return sendText(chatId, '📷 Sem problema, manda a foto de novo.');
+    if (value === 'sim') return gravarComprasPendentes(chatId, session);
+    if (value === 'cancelar') {
+      await clearSession(chatId);
+      return sendText(chatId, 'Lançamento cancelado. Manda /nova pra começar de novo.');
     }
   }
 
   return null;
 }
 
-/* ---------------- Foto → leitura da nota ---------------- */
+/* ---------------- Foto → leitura da nota (suporta várias folhas e vários itens) ---------------- */
 async function processarFoto(chatId, msg, session) {
   await sendText(chatId, '🔎 Lendo a nota fiscal, um momento...');
 
@@ -252,28 +257,68 @@ async function processarFoto(chatId, msg, session) {
     body: imgBuffer
   });
 
-  // Pede pro Claude extrair os dados estruturados da nota
-  const extraido = await lerNotaComClaude(base64);
+  // Pede pro Claude extrair os itens desta folha
+  const lida = await lerNotaComClaude(base64);
 
-  await saveSession(chatId, { step: 'aguardando_confirmacao', extraido, foto_path: storagePath });
+  const headerAnterior = session.extraido || {};
+  const headerNovo = {
+    loja: headerAnterior.loja || lida.loja || null,
+    data: headerAnterior.data || lida.data || null,
+    numero_nota: headerAnterior.numero_nota || lida.numero_nota || null
+  };
+  const itensAcumulados = (session.itens_extraidos || []).concat(lida.itens || []);
+  const fotosAcumuladas = (session.fotos || []).concat([storagePath]);
 
-  const resumo = [
-    `🏗️ Obra: <b>${escapeHtml(session.projeto_nome)}</b>`,
-    `🏷️ Tipo: <b>${escapeHtml(session.tipo)}</b>`,
-    `📋 Item: <b>${escapeHtml(session.orc_label || '—')}</b>`,
-    `💳 Pagamento: <b>${escapeHtml(session.forma_pagto || '—')}${session.forma_pagto === 'Cartão de crédito' ? ` (${session.parcelas}x)` : ''}</b>`,
-    `🏦 Banco: <b>${escapeHtml(session.banco || '—')}</b>`,
+  await saveSession(chatId, { extraido: headerNovo, itens_extraidos: itensAcumulados, fotos: fotosAcumuladas, foto_path: storagePath });
+
+  const itensDestaFolha = (lida.itens || []).map(it => `• ${escapeHtml(it.descricao || 'item')} — R$ ${fmtMoney(it.valor_total)}`).join('\n') || '(nenhum item identificado nessa folha)';
+  const totalAteAgora = itensAcumulados.reduce((s, it) => s + (Number(it.valor_total) || 0), 0);
+
+  const msgFolha = [
+    `📄 Itens identificados nesta folha:`,
+    itensDestaFolha,
     ``,
-    `🏪 Loja: ${escapeHtml(extraido.loja || '—')}`,
-    `💰 Valor: R$ ${fmtMoney(extraido.valor_total)}`,
-    `📅 Data: ${extraido.data || '—'}`,
-    `🧾 Nº nota: ${extraido.numero_nota || '—'}`,
-    `📝 ${escapeHtml(extraido.descricao || '—')}`
+    `Total acumulado da nota até agora: <b>R$ ${fmtMoney(totalAteAgora)}</b> (${itensAcumulados.length} item(ns))`,
+    ``,
+    `Essa nota tem mais alguma folha?`
   ].join('\n');
 
-  return sendText(chatId, `${resumo}\n\nConfere se está certo:`, inlineKeyboard([
+  return sendText(chatId, msgFolha, inlineKeyboard([
+    [{ text: '📄 Sim, mandar próxima folha', callback_data: 'maispag:sim' }],
+    [{ text: '✅ Não, é só isso', callback_data: 'maispag:nao' }]
+  ]));
+}
+
+async function mostrarResumoFinal(chatId, session) {
+  const s = await getSession(chatId); // pega a versão mais atualizada
+  const itens = s.itens_extraidos || [];
+  const header = s.extraido || {};
+  await saveSession(chatId, { step: 'aguardando_confirmacao' });
+
+  const totalGeral = itens.reduce((sum, it) => sum + (Number(it.valor_total) || 0), 0);
+  const listaItens = itens.map(it => `• ${escapeHtml(it.descricao || 'item')} — R$ ${fmtMoney(it.valor_total)}`).join('\n') || '(nenhum item)';
+
+  const resumo = [
+    `🏗️ Obra: <b>${escapeHtml(s.projeto_nome)}</b>`,
+    `🏷️ Tipo: <b>${escapeHtml(s.tipo)}</b>`,
+    `📋 Item do orçamento: <b>${escapeHtml(s.orc_label || '—')}</b>`,
+    `💳 Pagamento: <b>${escapeHtml(s.forma_pagto || '—')}${s.forma_pagto === 'Cartão de crédito' ? ` (${s.parcelas}x)` : ''}</b>`,
+    `🏦 Banco: <b>${escapeHtml(s.banco || '—')}</b>`,
+    ``,
+    `🏪 Loja: ${escapeHtml(header.loja || '—')}`,
+    `📅 Data: ${header.data || '—'}`,
+    `🧾 Nº nota: ${escapeHtml(header.numero_nota || '—')}`,
+    `📎 ${(s.fotos || []).length} folha(s) fotografada(s)`,
+    ``,
+    `<b>Itens (${itens.length}):</b>`,
+    listaItens,
+    ``,
+    `💰 <b>Total da nota: R$ ${fmtMoney(totalGeral)}</b>`
+  ].join('\n');
+
+  return sendText(chatId, `${resumo}\n\nCada item acima vai virar uma compra separada no sistema, todas com o mesmo número de nota. Confirma?`, inlineKeyboard([
     [{ text: '✅ Confirmar e lançar', callback_data: 'confirmar:sim' }],
-    [{ text: '📷 Tirar foto de novo', callback_data: 'confirmar:refazer_foto' }]
+    [{ text: '❌ Cancelar', callback_data: 'confirmar:cancelar' }]
   ]));
 }
 
@@ -287,12 +332,12 @@ async function lerNotaComClaude(base64Image) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 500,
+      max_tokens: 1500,
       messages: [{
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
-          { type: 'text', text: 'Extraia os dados desta nota fiscal/cupom fiscal brasileiro. Responda APENAS um JSON válido, sem markdown, sem texto antes ou depois, no formato: {"loja": string, "valor_total": number, "data": "YYYY-MM-DD" ou null, "numero_nota": string ou null, "descricao": string (resumo curto do que foi comprado, ex: "Cimento e areia")}. Se não conseguir ler algum campo, use null.' }
+          { type: 'text', text: 'Esta imagem é uma folha de uma nota fiscal/cupom fiscal brasileiro (pode ser só uma das folhas, se a nota tiver mais de uma). Responda APENAS um JSON válido, sem markdown, sem texto antes ou depois, neste formato: {"loja": string ou null, "data": "YYYY-MM-DD" ou null, "numero_nota": string ou null, "itens": [{"descricao": string curto, "quantidade": number ou null, "valor_unitario": number ou null, "valor_total": number}]}. Liste em "itens" CADA produto/serviço discriminado nesta folha, um por linha do cupom/nota — não agrupe. Se a folha não tiver itens discriminados (ex: só o cabeçalho ou só o totalizador), retorne "itens": []. Se não conseguir ler algum campo, use null.' }
         ]
       }]
     })
@@ -301,35 +346,53 @@ async function lerNotaComClaude(base64Image) {
   const textBlock = (data.content || []).find(c => c.type === 'text');
   let raw = textBlock ? textBlock.text : '{}';
   raw = raw.replace(/```json|```/g, '').trim();
-  try { return JSON.parse(raw); }
-  catch { return { loja: null, valor_total: null, data: null, numero_nota: null, descricao: null }; }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.itens)) parsed.itens = [];
+    parsed.itens = parsed.itens.map(it => ({
+      descricao: it.descricao || 'Item',
+      quantidade: it.quantidade || 1,
+      valor_unitario: it.valor_unitario != null ? it.valor_unitario : it.valor_total,
+      valor_total: Number(it.valor_total) || 0
+    }));
+    return parsed;
+  } catch {
+    return { loja: null, data: null, numero_nota: null, itens: [] };
+  }
 }
 
-/* ---------------- Gravação final ---------------- */
-async function gravarCompraPendente(chatId, session) {
-  const ex = session.extraido || {};
-  await sb('compras_pendentes', {
-    method: 'POST',
-    body: JSON.stringify({
-      projeto_id: session.projeto_id,
-      projeto_nome: session.projeto_nome,
-      tipo: session.tipo,
-      orc_id: session.orc_id,
-      orc_label: session.orc_label,
-      forma_pagto: session.forma_pagto || 'PIX',
-      parcelas: session.parcelas || 1,
-      banco: session.banco || '',
-      loja: ex.loja,
-      valor_total: ex.valor_total,
-      data_nota: ex.data,
-      numero_nota: ex.numero_nota,
-      descricao: ex.descricao,
-      foto_path: session.foto_path,
-      telegram_user: chatId
-    })
-  });
+/* ---------------- Gravação final (uma linha por item) ---------------- */
+async function gravarComprasPendentes(chatId, session) {
+  const s = await getSession(chatId);
+  const header = s.extraido || {};
+  const itens = s.itens_extraidos || [];
+  if (!itens.length) {
+    await clearSession(chatId);
+    return sendText(chatId, 'Não identifiquei nenhum item nas fotos enviadas, então não lancei nada. Manda /nova pra tentar de novo.');
+  }
+  const linhas = itens.map(it => ({
+    projeto_id: s.projeto_id,
+    projeto_nome: s.projeto_nome,
+    tipo: s.tipo,
+    orc_id: s.orc_id,
+    orc_label: s.orc_label,
+    forma_pagto: s.forma_pagto || 'PIX',
+    parcelas: s.parcelas || 1,
+    banco: s.banco || '',
+    loja: header.loja,
+    valor_total: it.valor_total,
+    quantidade: it.quantidade || 1,
+    valor_unitario: it.valor_unitario != null ? it.valor_unitario : it.valor_total,
+    data_nota: header.data,
+    numero_nota: header.numero_nota,
+    descricao: it.descricao,
+    foto_path: (s.fotos || [])[0] || null,
+    fotos: s.fotos || [],
+    telegram_user: chatId
+  }));
+  await sb('compras_pendentes', { method: 'POST', body: JSON.stringify(linhas) });
   await clearSession(chatId);
-  return sendText(chatId, '✅ Compra registrada! Ela vai aparecer no Qorban Controle na próxima vez que você abrir essa obra, na aba de Compras.\n\nManda /nova_compra pra lançar outra.');
+  return sendText(chatId, `✅ ${linhas.length} item(ns) registrado(s)! Eles vão aparecer no Qorban Controle na próxima vez que você abrir essa obra, na aba de Compras — todos com o número de nota <b>${escapeHtml(header.numero_nota || '—')}</b>.\n\nManda /nova pra lançar outra.`);
 }
 
 /* ---------------- utils ---------------- */

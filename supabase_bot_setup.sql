@@ -30,6 +30,9 @@ create policy "acesso anon completo" on public.bot_sessions for all to anon usin
 alter table public.bot_sessions add column if not exists forma_pagto text;
 alter table public.bot_sessions add column if not exists parcelas integer;
 alter table public.bot_sessions add column if not exists banco text;
+-- Suporte a nota com vários itens e várias folhas:
+alter table public.bot_sessions add column if not exists itens_extraidos jsonb default '[]'::jsonb;
+alter table public.bot_sessions add column if not exists fotos jsonb default '[]'::jsonb;
 
 -- Fila de compras lançadas pelo bot, esperando serem importadas pelo app.
 -- Isso evita o bot escrever direto no JSON grande do projeto (que o app também edita).
@@ -63,6 +66,10 @@ create policy "acesso anon completo" on public.compras_pendentes for all to anon
 alter table public.compras_pendentes add column if not exists forma_pagto text default 'PIX';
 alter table public.compras_pendentes add column if not exists parcelas integer default 1;
 alter table public.compras_pendentes add column if not exists banco text;
+-- Suporte a nota com vários itens (cada item vira uma linha) e várias folhas (várias fotos):
+alter table public.compras_pendentes add column if not exists quantidade numeric default 1;
+alter table public.compras_pendentes add column if not exists valor_unitario numeric;
+alter table public.compras_pendentes add column if not exists fotos jsonb default '[]'::jsonb;
 
 -- Bucket para as fotos das notas fiscais (privado; o app usa signed URL pra exibir).
 insert into storage.buckets (id, name, public)

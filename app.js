@@ -5925,6 +5925,9 @@ async function supaSignedUrlNotaFiscal(path){
     return r && r.signedURL ? SUPABASE_URL + r.signedURL : null;
   }catch(e){ return null; }
 }
+function importarCompraPendente(p){
+  compras.push({id:nextCompraId++, orcId:p.orc_id||null, tipo:p.tipo||'Material', data:p.data_nota||toISO(new Date()), loja:p.loja||'', notaNum:p.numero_nota||'', formaPagto:p.forma_pagto||'PIX', parcelas:p.parcelas||1, banco:p.banco||'', descricao:p.descricao||'', quantidade:p.quantidade||1, unidade:'', valorUnid:p.valor_unitario||p.valor_total||0, valorTotal:p.valor_total||0, entrega:'Recebido', dataEntregaPrevista:''});
+}
 async function refreshComprasPendentesTelegram(){
   const card = document.getElementById('cardComprasTelegram');
   const list = document.getElementById('telegramPendList');
@@ -5936,21 +5939,48 @@ async function refreshComprasPendentesTelegram(){
   if(!pend.length){ card.style.display = 'none'; return; }
   card.style.display = 'block';
   countEl.textContent = pend.length;
-  list.innerHTML = pend.map(p=>`
-    <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;" data-pend="${p.id}">
-      <div style="flex:1;min-width:220px;font-size:12.5px;line-height:1.7;">
-        <div><b>${escapeXml(p.orc_label||'(sem item vinculado)')}</b> · ${escapeXml(p.tipo||'')}</div>
-        <div>Loja: ${escapeXml(p.loja||'—')} · Nº nota: ${escapeXml(p.numero_nota||'—')} · Data: ${p.data_nota||'—'}</div>
-        <div>Pagto: ${escapeXml(p.forma_pagto||'—')}${p.forma_pagto==='Cartão de crédito'?` (${p.parcelas}x)`:''} · Banco: ${escapeXml(p.banco||'—')}</div>
-        <div style="font-family:var(--mono);color:var(--accent);">R$ ${fmtNum(p.valor_total||0,2)}</div>
-        <div style="color:var(--text-faint);">${escapeXml(p.descricao||'')}</div>
+
+  // agrupa por nota fiscal (mesma nota = mesma loja+número+data+telegram_user)
+  const grupos = {};
+  pend.forEach(p=>{
+    const chave = [p.numero_nota||'', p.loja||'', p.data_nota||'', p.telegram_user||''].join('|') || p.id;
+    if(!grupos[chave]) grupos[chave] = [];
+    grupos[chave].push(p);
+  });
+
+  list.innerHTML = Object.values(grupos).map(itens=>{
+    const first = itens[0];
+    const totalGrupo = itens.reduce((s,p)=>s+(p.valor_total||0),0);
+    const fotos = (first.fotos && first.fotos.length) ? first.fotos : (first.foto_path ? [first.foto_path] : []);
+    const linhasItens = itens.map(p=>`
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--border);" data-pend="${p.id}">
+        <div style="flex:1;min-width:200px;font-size:12px;line-height:1.6;">
+          <div><b>${escapeXml(p.descricao||'item')}</b> · ${escapeXml(p.orc_label||'(sem item vinculado)')} · ${escapeXml(p.tipo||'')}</div>
+          <div style="color:var(--text-faint);">${p.quantidade||1} un. × R$ ${fmtNum(p.valor_unitario||p.valor_total||0,2)}</div>
+        </div>
+        <div style="font-family:var(--mono);color:var(--accent);white-space:nowrap;">R$ ${fmtNum(p.valor_total||0,2)}</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn small primary" data-pendimport="${p.id}">Importar</button>
+          <button class="btn small" data-penddiscard="${p.id}">Descartar</button>
+        </div>
+      </div>`).join('');
+    const fotosLinks = fotos.map((f,i)=>`<a href="#" data-pendfoto data-fotopath="${escapeAttr(f)}" style="font-size:11px;margin-right:10px;">Ver folha ${i+1}</a>`).join('');
+    return `<div class="tbl-wrap" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;" data-pendgrupo>
+      <div class="toolbar-row" style="flex-wrap:wrap;">
+        <div style="font-size:12.5px;">
+          <div>Loja: <b>${escapeXml(first.loja||'—')}</b> · Nº nota: <b>${escapeXml(first.numero_nota||'—')}</b> · Data: ${first.data_nota||'—'}</div>
+          <div>Pagto: ${escapeXml(first.forma_pagto||'—')}${first.forma_pagto==='Cartão de crédito'?` (${first.parcelas}x)`:''} · Banco: ${escapeXml(first.banco||'—')} · ${itens.length} item(ns)</div>
+          <div>${fotosLinks || '<span style="color:var(--text-faint);font-size:11px;">Sem foto</span>'}</div>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+          <b style="font-family:var(--mono);color:var(--accent);">R$ ${fmtNum(totalGrupo,2)}</b>
+          <button class="btn small primary" data-pendimportgrupo="${itens.map(p=>p.id).join(',')}">Importar todos</button>
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        <a href="#" data-pendfoto="${p.id}" data-fotopath="${escapeAttr(p.foto_path||'')}" style="font-size:11px;">Ver foto da nota</a>
-        <button class="btn small primary" data-pendimport="${p.id}">Importar</button>
-        <button class="btn small" data-penddiscard="${p.id}">Descartar</button>
-      </div>
-    </div>`).join('');
+      ${linhasItens}
+    </div>`;
+  }).join('');
+
   list.querySelectorAll('[data-pendfoto]').forEach(a=>{
     a.addEventListener('click', async (e)=>{
       e.preventDefault();
@@ -5964,14 +5994,23 @@ async function refreshComprasPendentesTelegram(){
     btn.addEventListener('click', async ()=>{
       const p = pend.find(x=>String(x.id)===btn.dataset.pendimport);
       if(!p) return;
-      compras.push({id:nextCompraId++, orcId:p.orc_id||null, tipo:p.tipo||'Material', data:p.data_nota||toISO(new Date()), loja:p.loja||'', notaNum:p.numero_nota||'', formaPagto:p.forma_pagto||'PIX', parcelas:p.parcelas||1, banco:p.banco||'', descricao:p.descricao||'', quantidade:1, unidade:'', valorUnid:p.valor_total||0, valorTotal:p.valor_total||0, entrega:'Recebido', dataEntregaPrevista:''});
+      importarCompraPendente(p);
       await supaMarcarCompraPendente(p.id, 'importada');
+      renderCompras(); saveProject(); refreshComprasPendentesTelegram();
+    });
+  });
+  list.querySelectorAll('[data-pendimportgrupo]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const ids = btn.dataset.pendimportgrupo.split(',');
+      const itens = pend.filter(p=>ids.includes(String(p.id)));
+      itens.forEach(importarCompraPendente);
+      await Promise.all(itens.map(p=>supaMarcarCompraPendente(p.id, 'importada')));
       renderCompras(); saveProject(); refreshComprasPendentesTelegram();
     });
   });
   list.querySelectorAll('[data-penddiscard]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
-      if(!confirm('Descartar esta compra lançada pelo bot? Essa ação não pode ser desfeita.')) return;
+      if(!confirm('Descartar este item lançado pelo bot? Essa ação não pode ser desfeita.')) return;
       await supaMarcarCompraPendente(btn.dataset.penddiscard, 'descartada');
       refreshComprasPendentesTelegram();
     });

@@ -6,7 +6,10 @@ create table if not exists public.bot_sessions (
   chat_id bigint primary key,
   step text not null default 'inicio',
   -- 'inicio' | 'aguardando_obra' | 'aguardando_tipo' | 'aguardando_busca_item' | 'aguardando_escolha_item' |
-  -- 'aguardando_forma_pagto' | 'aguardando_parcelas' | 'aguardando_banco' | 'aguardando_foto' | 'aguardando_confirmacao'
+  -- 'aguardando_forma_pagto' | 'aguardando_parcelas' | 'aguardando_banco' | 'aguardando_foto' | 'aguardando_confirmacao' |
+  -- 'sol_aguardando_tipo' | 'sol_aguardando_busca_item' | 'sol_aguardando_escolha_item' | 'sol_aguardando_descricao' |
+  -- 'sol_aguardando_quantidade' | 'sol_aguardando_unidade' | 'sol_aguardando_confirmacao'
+  modo text default 'compra', -- 'compra' | 'solicitacao'
   projeto_id uuid,
   projeto_nome text,
   tipo text,
@@ -15,6 +18,9 @@ create table if not exists public.bot_sessions (
   forma_pagto text,
   parcelas integer,
   banco text,
+  descricao text,
+  quantidade numeric,
+  unidade text,
   itens_encontrados jsonb,
   extraido jsonb,
   foto_path text,
@@ -33,6 +39,11 @@ alter table public.bot_sessions add column if not exists banco text;
 -- Suporte a nota com vários itens e várias folhas:
 alter table public.bot_sessions add column if not exists itens_extraidos jsonb default '[]'::jsonb;
 alter table public.bot_sessions add column if not exists fotos jsonb default '[]'::jsonb;
+-- Suporte ao fluxo /solicitar (solicitação de compra, sem nota fiscal):
+alter table public.bot_sessions add column if not exists modo text default 'compra';
+alter table public.bot_sessions add column if not exists descricao text;
+alter table public.bot_sessions add column if not exists quantidade numeric;
+alter table public.bot_sessions add column if not exists unidade text;
 
 -- Fila de compras lançadas pelo bot, esperando serem importadas pelo app.
 -- Isso evita o bot escrever direto no JSON grande do projeto (que o app também edita).
@@ -82,3 +93,25 @@ create policy "bot lê e grava notas"
   to anon
   using (bucket_id = 'notas-fiscais')
   with check (bucket_id = 'notas-fiscais');
+
+-- Solicitações de compra (fluxo de aprovação), lançadas pelo site ou pelo bot.
+create table if not exists public.solicitacoes_compra (
+  id uuid primary key default gen_random_uuid(),
+  projeto_id uuid not null references public.projetos(id) on delete cascade,
+  projeto_nome text,
+  orc_id text,
+  orc_label text,
+  tipo text not null,
+  descricao text not null,
+  quantidade numeric default 1,
+  unidade text,
+  status text not null default 'pendente', -- pendente | aprovada | nao_aprovada
+  origem text not null default 'site', -- site | telegram
+  telegram_user text,
+  criado_em timestamptz not null default now(),
+  respondido_em timestamptz
+);
+
+alter table public.solicitacoes_compra enable row level security;
+drop policy if exists "acesso anon completo" on public.solicitacoes_compra;
+create policy "acesso anon completo" on public.solicitacoes_compra for all to anon using (true) with check (true);

@@ -670,64 +670,134 @@ tr[draggable="true"]{cursor:default;}
           <p class="desc">Lançadas pelo @NotasQorbanBot, aguardando revisão. Confira os dados extraídos da nota antes de importar.</p>
           <div id="telegramPendList"></div>
         </div>
-        <div class="card">
+
+        <div class="card" id="cardAdminToggle">
           <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">compras</span>Compras realizadas</h2>
-            <button class="btn primary small" id="btnAddCompra">+ Adicionar compra</button>
+            <h2 style="margin:0;font-size:12px;"><span class="tag">acesso</span>Modo administrador</h2>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;margin-left:auto;">
+              <input type="checkbox" id="chkAdminMode"> Estou acessando como administrador
+            </label>
           </div>
-          <div class="stats" id="comprasStatsStrip"></div>
-          <div class="tbl-wrap" style="overflow-x:auto;">
-            <table id="tblCompras">
-              <thead><tr>
-                <th style="min-width:170px;">Item do orçamento</th>
-                <th style="width:110px;">Tipo</th>
-                <th style="width:120px;">Data</th>
-                <th style="min-width:120px;">Loja / nome</th>
-                <th style="width:110px;">Nº nota/PIX</th>
-                <th style="width:130px;">Forma pagto.</th>
-                <th style="width:60px;">Parc.</th>
-                <th style="width:120px;">Banco</th>
-                <th style="min-width:150px;">Descrição</th>
-                <th style="width:80px;" class="num">Quant.</th>
-                <th style="width:60px;">Unid.</th>
-                <th style="width:90px;" class="num">R$/unid</th>
-                <th style="width:100px;" class="num">Valor total</th>
-                <th style="width:140px;">Entrega</th>
-                <th style="width:34px;"></th>
-              </tr></thead>
-              <tbody id="tbodyCompras"></tbody>
-            </table>
-          </div>
-          <div class="empty-state" id="emptyCompras" style="display:none;">
-            <div class="big">Nenhuma compra registrada</div>
-            Clique em "+ Adicionar compra" para começar.
-          </div>
+          <p class="desc" style="margin:0;">Ativa nesse navegador o quadro "Compras a aprovar" abaixo. Como o sistema ainda não tem tela de login, isso é apenas uma preferência local — não é uma trava de segurança.</p>
         </div>
-        <div class="card">
+
+        <div class="card" id="cardComprasAprovar" style="display:none;">
           <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">agenda</span>Compras da semana</h2>
+            <h2 style="margin:0;"><span class="tag">aprovação</span>Compras a aprovar <span id="aprovarCount" class="badge warn"></span></h2>
+            <button class="btn small" id="btnRefreshAprovar">Atualizar</button>
           </div>
-          <p class="desc">Insumos cujo pedido precisa ser feito nos próximos 7 dias (ou que já estão atrasados), considerando a antecedência configurada abaixo.</p>
-          <div id="comprasDaSemanaList"></div>
+          <p class="desc">Solicitações feitas pelo site ou pelo Telegram, aguardando sua decisão.</p>
+          <div id="aprovarList"></div>
+          <div class="empty-state" id="emptyAprovar" style="display:none;padding:16px;">Nenhuma solicitação pendente.</div>
         </div>
+
         <div class="card">
           <div class="toolbar-row">
-            <h2 style="margin:0;"><span class="tag">previsão</span>Previsão de compras futuras</h2>
-            <div style="display:flex;gap:6px;">
-              <button class="btn small" id="btnPrevCompSemana" data-period="semana">Semana</button>
-              <button class="btn small active" id="btnPrevCompQuinzena" data-period="quinzena">Quinzena</button>
-              <button class="btn small" id="btnPrevCompMes" data-period="mes">Mês</button>
+            <h2 style="margin:0;"><span class="tag">solicitação</span>Solicitar compra</h2>
+            <button class="btn small primary" id="btnAbrirSolicitarCompra">+ Nova solicitação</button>
+          </div>
+          <p class="desc">Envia uma solicitação de compra para o administrador aprovar — por aqui ou pelo @NotasQorbanBot (comando /solicitar).</p>
+          <div id="formSolicitarCompra" style="display:none;margin-top:10px;">
+            <div class="config-grid">
+              <div class="field-row">
+                <label>Item do orçamento</label>
+                <select id="solOrcId" class="cell"><option value="">—</option></select>
+              </div>
+              <div class="field-row">
+                <label>Tipo</label>
+                <select id="solTipo" class="cell">
+                  <option value="Material">Material</option>
+                  <option value="Mão de obra">Mão de obra</option>
+                  <option value="Equipamento">Equipamento</option>
+                  <option value="Extra">Extra</option>
+                </select>
+              </div>
+              <div class="field-row">
+                <label>Descrição</label>
+                <input type="text" id="solDescricao" class="cell" placeholder="O que precisa ser comprado">
+              </div>
+              <div class="field-row">
+                <label>Quantidade</label>
+                <input type="number" step="0.01" id="solQuantidade" class="cell" value="1">
+              </div>
+              <div class="field-row">
+                <label>Unidade</label>
+                <input type="text" id="solUnidade" class="cell" placeholder="sc, m³, un...">
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+              <button class="btn small primary" id="btnEnviarSolicitacao">Enviar solicitação</button>
+              <button class="btn small" id="btnCancelarSolicitacao">Cancelar</button>
             </div>
           </div>
-          <p class="desc">Calculado a partir das composições SINAPI de cada subitem e das datas do cronograma (Planejamento). Ajuste "Antecipar pedido" para definir com quantos dias úteis de antecedência cada insumo precisa ser encomendado.</p>
-          <div class="tbl-wrap">
-            <table id="tblPrevisaoCompras"><thead><tr>
-              <th style="width:80px;">Período</th><th>Subitem</th><th style="width:90px;">Tipo</th><th>Insumo</th>
-              <th class="num" style="width:110px;">Quantidade</th><th style="width:90px;">Data de uso</th><th style="width:170px;">Antecipar pedido (dias úteis)</th>
-            </tr></thead><tbody id="tbodyPrevisaoCompras"></tbody></table>
-          </div>
+          <div id="minhasSolicitacoesList" style="margin-top:14px;"></div>
         </div>
+
+        <details class="qitem" open>
+          <summary class="qitem-summary"><span class="chev">▸</span> Compras da semana</summary>
+          <div class="qitem-body">
+            <p class="desc">Insumos cujo pedido precisa ser feito nos próximos 7 dias (ou que já estão atrasados), considerando a antecedência configurada abaixo.</p>
+            <div id="comprasDaSemanaList"></div>
+          </div>
+        </details>
+
+        <details class="qitem" open>
+          <summary class="qitem-summary"><span class="chev">▸</span> Previsão de compras futuras</summary>
+          <div class="qitem-body">
+            <div class="toolbar-row">
+              <div style="display:flex;gap:6px;">
+                <button class="btn small" id="btnPrevCompSemana" data-period="semana">Semana</button>
+                <button class="btn small active" id="btnPrevCompQuinzena" data-period="quinzena">Quinzena</button>
+                <button class="btn small" id="btnPrevCompMes" data-period="mes">Mês</button>
+              </div>
+            </div>
+            <p class="desc">Calculado a partir das composições SINAPI de cada subitem e das datas do cronograma (Planejamento). Ajuste "Antecipar pedido" para definir com quantos dias úteis de antecedência cada insumo precisa ser encomendado.</p>
+            <div class="tbl-wrap">
+              <table id="tblPrevisaoCompras"><thead><tr>
+                <th style="width:80px;">Período</th><th>Subitem</th><th style="width:90px;">Tipo</th><th>Insumo</th>
+                <th class="num" style="width:110px;">Quantidade</th><th style="width:90px;">Data de uso</th><th style="width:170px;">Antecipar pedido (dias úteis)</th><th style="width:150px;"></th>
+              </tr></thead><tbody id="tbodyPrevisaoCompras"></tbody></table>
+            </div>
+          </div>
+        </details>
+
+        <details class="qitem" open>
+          <summary class="qitem-summary"><span class="chev">▸</span> Compras realizadas</summary>
+          <div class="qitem-body">
+            <div class="toolbar-row">
+              <button class="btn primary small" id="btnAddCompra">+ Adicionar compra</button>
+            </div>
+            <div class="stats" id="comprasStatsStrip"></div>
+            <div class="tbl-wrap" style="overflow-x:auto;">
+              <table id="tblCompras">
+                <thead><tr>
+                  <th style="min-width:170px;">Item do orçamento</th>
+                  <th style="width:110px;">Tipo</th>
+                  <th style="width:120px;">Data</th>
+                  <th style="min-width:120px;">Loja / nome</th>
+                  <th style="width:110px;">Nº nota/PIX</th>
+                  <th style="width:130px;">Forma pagto.</th>
+                  <th style="width:60px;">Parc.</th>
+                  <th style="width:120px;">Banco</th>
+                  <th style="min-width:150px;">Descrição</th>
+                  <th style="width:80px;" class="num">Quant.</th>
+                  <th style="width:60px;">Unid.</th>
+                  <th style="width:90px;" class="num">R$/unid</th>
+                  <th style="width:100px;" class="num">Valor total</th>
+                  <th style="width:140px;">Entrega</th>
+                  <th style="width:34px;"></th>
+                </tr></thead>
+                <tbody id="tbodyCompras"></tbody>
+              </table>
+            </div>
+            <div class="empty-state" id="emptyCompras" style="display:none;">
+              <div class="big">Nenhuma compra registrada</div>
+              Clique em "+ Adicionar compra" para começar.
+            </div>
+          </div>
+        </details>
       </div>
+
       <div class="panel" id="panel-estoque">
         <div class="card">
           <h2><span class="tag">estoque</span>Materiais e equipamentos em estoque</h2>
@@ -1759,6 +1829,21 @@ tr[draggable="true"]{cursor:default;}
             <div class="field-row" id="cfgDataFimRow" style="display:none;">
               <label>Data fim</label>
               <input type="date" id="cfgDataFim" class="cell">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2><span class="tag">telegram</span>Aprovação de compras via Telegram</h2>
+          <p class="desc">IDs de chat do Telegram usados pelo @NotasQorbanBot para notificar solicitações e aprovações. É uma configuração da empresa (vale para todas as obras). Para descobrir um ID de chat, mande uma mensagem pro bot @userinfobot no Telegram — ele te devolve o seu ID.</p>
+          <div class="config-grid">
+            <div class="field-row">
+              <label>ID Telegram Administrador</label>
+              <input type="text" id="cfgTelegramAdminId" class="cell" placeholder="Ex: 123456789">
+            </div>
+            <div class="field-row">
+              <label>ID Telegram Setor Compras</label>
+              <input type="text" id="cfgTelegramComprasId" class="cell" placeholder="Ex: 123456789 ou -100xxxxxxxxxx (grupo)">
             </div>
           </div>
         </div>

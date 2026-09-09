@@ -148,6 +148,7 @@ const FACES_EXTERNAS = ['Externo','Externo (parte interna da platibanda)'];
 const UNIDADES_COMPRA = ['ajuda de custo','balde','diária','g','kg','lata','litro','m','m2','m3','mensal','mil','produção','quinzenal','salário','semanal','ton','unid','vara','vb'];
 let antecipacao = {};
 let comprasPrevisaoPeriod = 'quinzena';
+let comprasPrevisaoRowsCache = [];
 
 /* ---------------- utilidades ---------------- */
 function normalize(s){
@@ -2117,13 +2118,14 @@ function computeComprasPrevisaoRows(){
 }
 function renderPrevisaoCompras(){
   const rows = computeComprasPrevisaoRows();
+  comprasPrevisaoRowsCache = rows;
   const tbody = document.getElementById('tbodyPrevisaoCompras');
   if(tbody){
     if(rows.length===0){
-      tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-faint);text-align:center;padding:20px;">Sem cronograma calculado ainda — preencha o Orçamento e o Planejamento.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" style="color:var(--text-faint);text-align:center;padding:20px;">Sem cronograma calculado ainda — preencha o Orçamento e o Planejamento.</td></tr>`;
     } else {
       const projStart = new Date(Math.min(...rows.map(r=>r.dataUso)));
-      tbody.innerHTML = rows.map(r=>{
+      tbody.innerHTML = rows.map((r,idx)=>{
         const periodo = periodLabelFor(periodKeyFor(r.dataUso, comprasPrevisaoPeriod, projStart), comprasPrevisaoPeriod, projStart);
         return `<tr>
           <td>${periodo}</td>
@@ -2133,6 +2135,7 @@ function renderPrevisaoCompras(){
           <td class="num" style="font-family:var(--mono)">${fmtNum(r.qty,2)} ${escapeXml(r.unit||'')}</td>
           <td>${fmtDate(r.dataUso)}</td>
           <td><input type="number" min="0" step="1" class="cell small nospin" style="width:56px;" data-antecip="${r.code}" value="${r.antecedencia||0}" title="Dias úteis de antecedência para pedir"> <span class="hint">→ pedir até ${fmtDate(r.dataPedido)}</span></td>
+          <td><button class="btn small" data-solprev="${idx}">Solicitar autorização</button></td>
         </tr>`;
       }).join('');
       tbody.querySelectorAll('[data-antecip]').forEach(inp=>{
@@ -2141,6 +2144,9 @@ function renderPrevisaoCompras(){
           saveProject();
           renderPrevisaoCompras();
         });
+      });
+      tbody.querySelectorAll('[data-solprev]').forEach(btn=>{
+        btn.addEventListener('click', ()=>solicitarAutorizacaoPrevisao(comprasPrevisaoRowsCache[parseInt(btn.dataset.solprev,10)]));
       });
     }
   }
@@ -2177,6 +2183,7 @@ function setupComprasTab(){
   document.getElementById('btnPrevCompSemana').addEventListener('click', ()=>setPrevCompPeriod('semana'));
   document.getElementById('btnPrevCompQuinzena').addEventListener('click', ()=>setPrevCompPeriod('quinzena'));
   document.getElementById('btnPrevCompMes').addEventListener('click', ()=>setPrevCompPeriod('mes'));
+  setupComprasAprovacaoUI();
 }
 
 /* ============================================================
@@ -4572,7 +4579,7 @@ const FUNCOES_OPERARIO_BASE = [
 ];
 const CLIMA_OPCOES = ['Bom','Nublado','Chuvoso','Impraticável'];
 
-const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[], deposito:{compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]}};
+const DEFAULT_SISTEMA_GLOBAL = {escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[], deposito:{compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]}, telegramAdminId:'', telegramComprasId:''};
 let nextFuncionarioId = 1;
 let obrasCache = [];
 
@@ -4633,6 +4640,19 @@ function renderEmpresaAll(){
   try{ renderColaboradores(); }catch(e){ console.error('Acessos:', e); }
   try{ renderFuncionarios(); }catch(e){ console.error('Funcionários:', e); }
   try{ renderDeposito(); }catch(e){ console.error('Depósito:', e); }
+  try{ renderTelegramConfig(); }catch(e){ console.error('Telegram config:', e); }
+}
+function renderTelegramConfig(){
+  const admEl = document.getElementById('cfgTelegramAdminId');
+  const comprasEl = document.getElementById('cfgTelegramComprasId');
+  if(admEl) admEl.value = sistemaGlobal.telegramAdminId || '';
+  if(comprasEl) comprasEl.value = sistemaGlobal.telegramComprasId || '';
+}
+function setupTelegramConfig(){
+  const admEl = document.getElementById('cfgTelegramAdminId');
+  const comprasEl = document.getElementById('cfgTelegramComprasId');
+  if(admEl) admEl.addEventListener('input', ()=>{ sistemaGlobal.telegramAdminId = admEl.value.trim(); saveSistemaGlobal(); });
+  if(comprasEl) comprasEl.addEventListener('input', ()=>{ sistemaGlobal.telegramComprasId = comprasEl.value.trim(); saveSistemaGlobal(); });
 }
 
 /* --- Escritório --- */
@@ -6016,6 +6036,163 @@ async function refreshComprasPendentesTelegram(){
     });
   });
 }
+/* ---------------- Solicitações de compra (aprovação via site + Telegram) ---------------- */
+async function supaInsertSolicitacao(row){ return supaRequest('solicitacoes_compra', {method:'POST', headers:{...SUPA_HEADERS,'Prefer':'return=representation'}, body: JSON.stringify(row)}); }
+async function supaListSolicitacoes(projetoId, status){ return supaRequest(`solicitacoes_compra?projeto_id=eq.${projetoId}${status?`&status=eq.${status}`:''}&select=*&order=criado_em.desc`, {method:'GET'}); }
+async function supaAtualizarSolicitacao(id, patch){ return supaRequest(`solicitacoes_compra?id=eq.${id}`, {method:'PATCH', headers:{...SUPA_HEADERS,'Prefer':'return=minimal'}, body: JSON.stringify(patch)}); }
+async function notificarAdminSolicitacao(solicitacaoId){
+  try{
+    await fetch('/api/notificar-solicitacao', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({solicitacaoId})});
+  }catch(e){ console.error('Falha ao notificar admin:', e); }
+}
+async function notificarSetorCompras(chatId, texto){
+  try{
+    await fetch('/api/telegram-notify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({chatId, text: texto})});
+  }catch(e){ console.error('Falha ao notificar setor de compras:', e); }
+}
+function abrirFormSolicitarCompra(prefill){
+  const form = document.getElementById('formSolicitarCompra');
+  if(!form) return;
+  form.style.display = 'block';
+  const orcSel = document.getElementById('solOrcId');
+  if(orcSel) orcSel.innerHTML = '<option value="">—</option>' + orcOptionsHtml(prefill && prefill.orcId);
+  document.getElementById('solTipo').value = (prefill && prefill.tipo) || 'Material';
+  document.getElementById('solDescricao').value = (prefill && prefill.descricao) || '';
+  document.getElementById('solQuantidade').value = (prefill && prefill.quantidade) || 1;
+  document.getElementById('solUnidade').value = (prefill && prefill.unidade) || '';
+  form.scrollIntoView({behavior:'smooth', block:'center'});
+}
+async function enviarSolicitacaoCompra(){
+  const orcSel = document.getElementById('solOrcId');
+  const orcId = orcSel.value || null;
+  const orcItem = orcId ? orcamento.find(o=>String(o.id)===String(orcId)) : null;
+  const row = {
+    projeto_id: currentProjectId,
+    projeto_nome: (document.getElementById('cfgNome')||{}).value || '',
+    orc_id: orcId,
+    orc_label: orcItem ? `${orcItem.numero||''} ${orcItem.nome||''}`.trim() : '',
+    tipo: document.getElementById('solTipo').value,
+    descricao: document.getElementById('solDescricao').value.trim(),
+    quantidade: parseFloat(document.getElementById('solQuantidade').value)||1,
+    unidade: document.getElementById('solUnidade').value.trim(),
+    status: 'pendente',
+    origem: 'site'
+  };
+  if(!row.descricao){ alert('Descreva o que precisa ser comprado.'); return; }
+  try{
+    const inserted = await supaInsertSolicitacao(row);
+    const id = inserted && inserted[0] && inserted[0].id;
+    if(id) await notificarAdminSolicitacao(id);
+    document.getElementById('formSolicitarCompra').style.display = 'none';
+    renderMinhasSolicitacoes();
+    alert('Solicitação enviada! O administrador foi avisado no Telegram.');
+  }catch(e){
+    console.error('Solicitar compra:', e);
+    alert('Não consegui enviar a solicitação. Tente de novo em instantes.');
+  }
+}
+async function solicitarAutorizacaoPrevisao(r){
+  if(!confirm(`Solicitar autorização de compra para:\n\n${r.desc} — ${fmtNum(r.qty,2)} ${r.unit||''}\nSubitem: ${r.subitemNome}\n\nConfirma?`)) return;
+  const row = {
+    projeto_id: currentProjectId,
+    projeto_nome: (document.getElementById('cfgNome')||{}).value || '',
+    orc_id: r.subitemId,
+    orc_label: r.subitemNome,
+    tipo: r.kind,
+    descricao: r.desc,
+    quantidade: r.qty,
+    unidade: r.unit,
+    status: 'pendente',
+    origem: 'site'
+  };
+  try{
+    const inserted = await supaInsertSolicitacao(row);
+    const id = inserted && inserted[0] && inserted[0].id;
+    if(id) await notificarAdminSolicitacao(id);
+    renderMinhasSolicitacoes();
+    alert('Solicitação de autorização enviada ao administrador!');
+  }catch(e){
+    console.error('Solicitar autorização:', e);
+    alert('Não consegui enviar a solicitação. Tente de novo em instantes.');
+  }
+}
+async function renderMinhasSolicitacoes(){
+  const wrap = document.getElementById('minhasSolicitacoesList');
+  if(!wrap || !currentProjectId) return;
+  let lista = [];
+  try{ lista = await supaRequest(`solicitacoes_compra?projeto_id=eq.${currentProjectId}&select=*&order=criado_em.desc&limit=10`, {method:'GET'}); }
+  catch(e){ console.error('Minhas solicitações:', e); return; }
+  if(!lista.length){ wrap.innerHTML = ''; return; }
+  const badge = s => s==='aprovada' ? '<span class="badge ok">Aprovada</span>' : s==='nao_aprovada' ? '<span class="badge crit">Não aprovada</span>' : '<span class="badge warn">Pendente</span>';
+  wrap.innerHTML = `<h3 style="font-size:11px;color:var(--text-faint);text-transform:uppercase;margin:0 0 8px;">Últimas solicitações desta obra</h3>` + lista.map(s=>`
+    <div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--border);font-size:12px;">
+      <div style="flex:1;">${escapeXml(s.descricao||'')} <span style="color:var(--text-faint);">— ${fmtNum(s.quantidade||0,2)} ${escapeXml(s.unidade||'')} · ${escapeXml(s.tipo||'')}${s.orc_label?' · '+escapeXml(s.orc_label):''}</span></div>
+      ${badge(s.status)}
+    </div>`).join('');
+}
+async function refreshComprasAprovar(){
+  const card = document.getElementById('cardComprasAprovar');
+  const list = document.getElementById('aprovarList');
+  const countEl = document.getElementById('aprovarCount');
+  const emptyEl = document.getElementById('emptyAprovar');
+  const isAdmin = document.getElementById('chkAdminMode') && document.getElementById('chkAdminMode').checked;
+  if(!card) return;
+  if(!isAdmin || !currentProjectId){ card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  let lista = [];
+  try{ lista = await supaListSolicitacoes(currentProjectId, 'pendente'); }
+  catch(e){ console.error('Compras a aprovar:', e); return; }
+  countEl.textContent = lista.length || '';
+  emptyEl.style.display = lista.length ? 'none' : 'block';
+  list.innerHTML = lista.map(s=>`
+    <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="flex:1;min-width:220px;font-size:12.5px;line-height:1.7;">
+        <div><b>${escapeXml(s.descricao||'')}</b> · ${escapeXml(s.tipo||'')}</div>
+        <div>${fmtNum(s.quantidade||0,2)} ${escapeXml(s.unidade||'')}${s.orc_label?' · Item: '+escapeXml(s.orc_label):''}</div>
+        <div style="color:var(--text-faint);">Origem: ${s.origem==='telegram'?'Telegram':'Site'} · ${s.criado_em ? new Date(s.criado_em).toLocaleString('pt-BR') : ''}</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn small primary" data-solaprovar="${s.id}">Aprovada</button>
+        <button class="btn small" data-solreprovar="${s.id}">Não aprovada</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-solaprovar]').forEach(btn=>{
+    btn.addEventListener('click', ()=>decidirSolicitacao(lista, btn.dataset.solaprovar, 'aprovada'));
+  });
+  list.querySelectorAll('[data-solreprovar]').forEach(btn=>{
+    btn.addEventListener('click', ()=>decidirSolicitacao(lista, btn.dataset.solreprovar, 'nao_aprovada'));
+  });
+}
+async function decidirSolicitacao(lista, id, status){
+  const s = lista.find(x=>String(x.id)===String(id));
+  if(!s) return;
+  await supaAtualizarSolicitacao(id, {status, respondido_em: new Date().toISOString()});
+  const chatComprasId = sistemaGlobal.telegramComprasId;
+  if(chatComprasId){
+    const texto = `${status==='aprovada'?'✅ Compra aprovada':'❌ Compra não aprovada'}: ${s.descricao} — ${fmtNum(s.quantidade||0,2)} ${s.unidade||''} (${s.tipo||''})${s.orc_label?' · '+s.orc_label:''} · Obra: ${s.projeto_nome||''}`;
+    await notificarSetorCompras(chatComprasId, texto);
+  }
+  refreshComprasAprovar();
+}
+function setupComprasAprovacaoUI(){
+  const chk = document.getElementById('chkAdminMode');
+  if(chk){
+    chk.checked = localStorage.getItem('qorban_admin_mode')==='1';
+    chk.addEventListener('change', ()=>{
+      localStorage.setItem('qorban_admin_mode', chk.checked ? '1':'0');
+      refreshComprasAprovar();
+    });
+  }
+  const btnRef = document.getElementById('btnRefreshAprovar');
+  if(btnRef) btnRef.addEventListener('click', refreshComprasAprovar);
+  const btnAbrir = document.getElementById('btnAbrirSolicitarCompra');
+  if(btnAbrir) btnAbrir.addEventListener('click', ()=>abrirFormSolicitarCompra());
+  const btnCancelar = document.getElementById('btnCancelarSolicitacao');
+  if(btnCancelar) btnCancelar.addEventListener('click', ()=>{ document.getElementById('formSolicitarCompra').style.display = 'none'; });
+  const btnEnviar = document.getElementById('btnEnviarSolicitacao');
+  if(btnEnviar) btnEnviar.addEventListener('click', enviarSolicitacaoCompra);
+}
+
 async function supaUpsertSistemaGlobal(row){
   return supaRequest('sistema_global', { method:'POST', headers:{...SUPA_HEADERS,'Prefer':'resolution=merge-duplicates,return=representation'}, body: JSON.stringify(row) });
 }
@@ -6095,6 +6272,8 @@ async function loadProject(){
         setSyncStatus('carregado do banco ✓');
         await refreshProjectSelect();
         refreshComprasPendentesTelegram();
+        refreshComprasAprovar();
+        renderMinhasSolicitacoes();
         return true;
       }
     }
@@ -6107,6 +6286,8 @@ async function loadProject(){
       setSyncStatus('carregado do banco ✓');
       await refreshProjectSelect();
       refreshComprasPendentesTelegram();
+      refreshComprasAprovar();
+      renderMinhasSolicitacoes();
       return true;
     }
   }catch(e){
@@ -6129,6 +6310,8 @@ async function switchProject(id){
   document.getElementById('bdiPercent').value = bdiPercent;
   recalcAll();
   refreshComprasPendentesTelegram();
+  refreshComprasAprovar();
+  renderMinhasSolicitacoes();
 }
 async function createNewProject(){
   const nome = prompt('Nome da nova obra:', 'Nova obra');
@@ -6253,6 +6436,7 @@ function setupTopbar(){
   setupPatrimonioTab();
   setupConsolidacaoTab();
   setupAcessosTab();
+  setupTelegramConfig();
   setupDiarioTab();
   await setupFuncionariosTab();
   setupGanttToggle();

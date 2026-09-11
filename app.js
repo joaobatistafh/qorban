@@ -4283,6 +4283,7 @@ function migrateDiarioEntry(e){
       });
     }
   }
+  if(!Array.isArray(e.fotos)) e.fotos = [];
 }
 function materialRowHtml(entryId, listName, r){
   return `<tr data-diario="${entryId}" data-matrow="${r.id}">
@@ -4292,6 +4293,13 @@ function materialRowHtml(entryId, listName, r){
     <td><input type="text" class="cell" data-mat="obs" data-matlist="${listName}" data-diario="${entryId}" data-matrow="${r.id}" value="${escapeAttr(r.obs)}"></td>
     <td><button class="icon-btn" data-matremove="${r.id}" data-matlist="${listName}" data-diario="${entryId}" title="Remover">✕</button></td>
   </tr>`;
+}
+function fotoCardHtml(entryId, f){
+  return `<div class="foto-card" data-diario="${entryId}" data-fotorow="${f.id}">
+    <img src="/api/drive-file?fileId=${encodeURIComponent(f.driveFileId)}" alt="${escapeAttr(f.legenda)}" loading="lazy">
+    <div class="foto-card-caption">${escapeXml(f.legenda||'(sem legenda)')}</div>
+    <button class="icon-btn foto-card-remove" data-fotoremove="${f.id}" data-diario="${entryId}" title="Remover da lista (o arquivo continua no Drive)">✕</button>
+  </div>`;
 }
 function diarioEntryHtml(e, isOpen){
   const totalEfetivo = (e.efetivo||[]).filter(r=>r.manha||r.tarde).length;
@@ -4356,6 +4364,19 @@ function diarioEntryHtml(e, isOpen){
         <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Item</th><th class="num" style="width:90px;">Quantidade</th><th style="width:90px;">Unid.</th><th>Observação</th><th style="width:34px;"></th></tr></thead>
           <tbody>${(e.saidaMateriais||[]).map(r=>materialRowHtml(e.id,'saidaMateriais',r)).join('')}</tbody>
         </table></div>
+      </div>
+      <div class="qsection">
+        <div class="toolbar-row"><h3><span class="tag">fotos</span>Fotos do dia</h3></div>
+        <p class="desc">Salvas automaticamente no Google Drive, em Sistema de obra / Diário de obra / ${escapeXml((document.getElementById('cfgNome')||{}).value || 'obra')}, já nomeadas como "AAAA-MM-DD - Legenda".</p>
+        <div class="fotos-grid" id="fotosGrid-${e.id}">
+          ${(e.fotos||[]).map(f=>fotoCardHtml(e.id,f)).join('') || '<p class="hint">Nenhuma foto anexada ainda.</p>'}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;">
+          <input type="file" accept="image/*" capture="environment" class="cell" id="fotoInput-${e.id}" style="max-width:220px;">
+          <input type="text" class="cell" id="fotoLegenda-${e.id}" placeholder="Legenda da foto" style="max-width:220px;">
+          <button class="btn small primary" data-diarioaddfoto="${e.id}">Enviar foto</button>
+          <span class="hint" id="fotoStatus-${e.id}"></span>
+        </div>
       </div>
       <div class="qsection">
         <h3><span class="tag">ocorrências</span>Ocorrências / observações</h3>
@@ -4491,6 +4512,81 @@ function bindDiarioEvents(){
       renderDiario(); saveProject();
     });
   });
+  wrap.querySelectorAll('[data-diarioaddfoto]').forEach(btn=>{
+    btn.addEventListener('click', (ev)=>{
+      ev.preventDefault();
+      const entryId = btn.dataset.diarioaddfoto;
+      const entry = diarioObra.find(x=>String(x.id)===entryId);
+      if(!entry) return;
+      const fileInput = document.getElementById(`fotoInput-${entryId}`);
+      const legendaInput = document.getElementById(`fotoLegenda-${entryId}`);
+      const statusEl = document.getElementById(`fotoStatus-${entryId}`);
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if(!file){ if(statusEl) statusEl.textContent = 'Escolha uma foto primeiro.'; return; }
+      uploadFotoDiario(entry, file, legendaInput ? legendaInput.value.trim() : '', statusEl);
+    });
+  });
+  wrap.querySelectorAll('[data-fotoremove]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===btn.dataset.diario);
+      if(!entry) return;
+      if(!confirm('Remover essa foto da lista? O arquivo continua salvo no Google Drive, só sai daqui do sistema.')) return;
+      entry.fotos = (entry.fotos||[]).filter(f=>String(f.id)!==btn.dataset.fotoremove);
+      renderDiario(); saveProject();
+    });
+  });
+}
+async function comprimirImagemParaUpload(file, maxDim, qualidade){
+  const dataUrl = await new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve,reject)=>{
+    const im = new Image();
+    im.onload = ()=>resolve(im);
+    im.onerror = reject;
+    im.src = dataUrl;
+  });
+  let { width, height } = img;
+  if(width > maxDim || height > maxDim){
+    const escala = maxDim / Math.max(width, height);
+    width = Math.round(width*escala); height = Math.round(height*escala);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+  const comprimidoDataUrl = canvas.toDataURL('image/jpeg', qualidade);
+  return { base64: comprimidoDataUrl.split(',')[1], mimeType: 'image/jpeg' };
+}
+async function uploadFotoDiario(entry, file, legenda, statusEl){
+  if(statusEl) statusEl.textContent = '📤 Enviando pro Google Drive...';
+  try{
+    const { base64, mimeType } = await comprimirImagemParaUpload(file, 1600, 0.82);
+    const projectName = (document.getElementById('cfgNome')||{}).value || 'Obra sem nome';
+    const resp = await fetch('/api/drive-upload-foto', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ projectName, dataISO: entry.data || toISO(new Date()), legenda, fileBase64: base64, mimeType, fileName: file.name })
+    });
+    const data = await resp.json();
+    if(!resp.ok || !data.ok){
+      if(data.error==='DRIVE_NAO_CONECTADO'){
+        if(statusEl) statusEl.innerHTML = '⚠️ Google Drive não conectado. <a href="#" data-irconfig>Conectar agora</a>.';
+        const link = statusEl.querySelector('[data-irconfig]');
+        if(link) link.addEventListener('click', (ev)=>{ ev.preventDefault(); const btn=document.querySelector('.navbtn[data-tab="configuracao"]'); if(btn) btn.click(); });
+        return;
+      }
+      throw new Error(data.error || 'falha no upload');
+    }
+    entry.fotos = entry.fotos || [];
+    entry.fotos.push({id: nextDiarioSubId++, driveFileId: data.fileId, legenda, data: entry.data});
+    renderDiario(); saveProject();
+  }catch(e){
+    console.error('Upload foto diário:', e);
+    if(statusEl) statusEl.textContent = '⚠️ Não consegui enviar a foto. Confira a configuração do Google Drive.';
+    else alert('Não consegui enviar a foto pro Google Drive.');
+  }
 }
 function diarioSearchableText(e){
   const nomeFunc = id => (sistemaGlobal.funcionarios.find(x=>String(x.id)===String(id))||{}).nome || '';
@@ -4503,6 +4599,7 @@ function diarioSearchableText(e){
     ...(e.efetivo||[]).map(r=>nomeFunc(r.funcionarioId)),
     ...(e.entradaMateriais||[]).map(r=>(r.item||'')+' '+(r.obs||'')),
     ...(e.saidaMateriais||[]).map(r=>(r.item||'')+' '+(r.obs||'')),
+    ...(e.fotos||[]).map(f=>f.legenda||''),
   ].join(' ').toLowerCase();
 }
 let diarioSearchQuery = '';
@@ -4528,7 +4625,7 @@ function addDiarioEntry(){
   const entry = {
     id: nextDiarioId++, numero: diarioObra.length+1, data: toISO(new Date()),
     climaManha:'Bom', climaTarde:'Bom', climaNoite:'Bom', responsavel:'',
-    efetivo:[], atividadesTexto:'', atividadesEap:[], entradaMateriais:[], saidaMateriais:[], ocorrencias:'',
+    efetivo:[], atividadesTexto:'', atividadesEap:[], entradaMateriais:[], saidaMateriais:[], ocorrencias:'', fotos:[],
   };
   syncEfetivoDoDia(entry);
   diarioObra.push(entry);
@@ -4536,6 +4633,8 @@ function addDiarioEntry(){
 }
 function setupDiarioTab(){
   document.getElementById('btnAddDiario').addEventListener('click', addDiarioEntry);
+  const btnPdf = document.getElementById('btnExportarDiarioPdf');
+  if(btnPdf) btnPdf.addEventListener('click', abrirModalExportarDiarioPdf);
   const searchInput = document.getElementById('diarioSearchInput');
   if(searchInput){
     searchInput.addEventListener('input', ()=>{
@@ -4545,10 +4644,159 @@ function setupDiarioTab(){
   }
 }
 
-/* ============================================================
-   16. EMPRESA — ESCRITÓRIO / PATRIMÔNIO / ACESSOS / CONSOLIDAÇÃO
-   (dados globais da empresa, compartilhados entre todas as obras)
-   ============================================================ */
+/* ---------------- Exportar Diário de obra em PDF ---------------- */
+function abrirModalExportarDiarioPdf(){
+  const overlay = document.getElementById('modalOverlay');
+  const box = document.getElementById('modalBox');
+  const hoje = toISO(new Date());
+  const datasDisponiveis = diarioObra.map(e=>e.data).filter(Boolean).sort();
+  const min = datasDisponiveis[0] || hoje;
+  const max = datasDisponiveis[datasDisponiveis.length-1] || hoje;
+  box.innerHTML = `
+    <h3>Exportar Diário de obra em PDF</h3>
+    <p>Escolha o intervalo de dias. Cada dia do diário vira uma página no PDF.</p>
+    <div class="field-row"><label>De</label><input type="date" class="cell" id="pdfDiarioDe" value="${min}"></div>
+    <div class="field-row"><label>Até</label><input type="date" class="cell" id="pdfDiarioAte" value="${max}"></div>
+    <div class="modal-error" id="pdfDiarioError">Nenhum registro de diário encontrado nesse intervalo.</div>
+    <div class="modal-actions">
+      <button class="btn" id="pdfDiarioCancelar">Cancelar</button>
+      <button class="btn primary" id="pdfDiarioGerar">Gerar PDF</button>
+    </div>
+  `;
+  overlay.style.display = 'flex';
+  const close = ()=>{ overlay.style.display = 'none'; };
+  document.getElementById('pdfDiarioCancelar').addEventListener('click', close);
+  overlay.addEventListener('click', function outside(e){ if(e.target===overlay){ overlay.removeEventListener('click',outside); close(); } });
+  document.getElementById('pdfDiarioGerar').addEventListener('click', async ()=>{
+    const de = document.getElementById('pdfDiarioDe').value;
+    const ate = document.getElementById('pdfDiarioAte').value;
+    const entradas = diarioObra.filter(e=>e.data && e.data>=de && e.data<=ate).sort((a,b)=>a.data.localeCompare(b.data));
+    if(!entradas.length){ document.getElementById('pdfDiarioError').style.display = 'block'; return; }
+    close();
+    await gerarPdfDiario(entradas);
+  });
+}
+
+async function fotoParaDataUrl(driveFileId){
+  try{
+    const resp = await fetch(`/api/drive-file?fileId=${encodeURIComponent(driveFileId)}`);
+    if(!resp.ok) return null;
+    const blob = await resp.blob();
+    return await new Promise(resolve=>{
+      const reader = new FileReader();
+      reader.onload = ()=>resolve(reader.result);
+      reader.onerror = ()=>resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  }catch(e){ console.error('Foto pro PDF:', e); return null; }
+}
+
+async function gerarPdfDiario(entradas){
+  if(!window.jspdf){ alert('Biblioteca de PDF não carregou. Verifique sua conexão e tente de novo.'); return; }
+  showToast('Gerando PDF...');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 36;
+  const nomeObra = (document.getElementById('cfgNome')||{}).value || 'Obra';
+
+  for(let i=0; i<entradas.length; i++){
+    const e = entradas[i];
+    if(i>0) doc.addPage();
+    let y = margin;
+
+    doc.setFont('helvetica','bold'); doc.setFontSize(14);
+    doc.text(`Diário de obra — ${escapeXml(nomeObra)}`, margin, y); y += 18;
+    doc.setFontSize(11); doc.setFont('helvetica','normal');
+    doc.text(`Registro nº ${e.numero}  ·  Data: ${fmtDate(e.data)}  ·  Responsável: ${e.responsavel||'—'}`, margin, y); y += 16;
+    doc.text(`Clima — manhã: ${e.climaManha||'—'}   tarde: ${e.climaTarde||'—'}   noite: ${e.climaNoite||'—'}`, margin, y); y += 20;
+
+    doc.setFont('helvetica','bold'); doc.text('Efetivo do dia', margin, y); y += 14;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+    const efetivo = e.efetivo||[];
+    if(!efetivo.length){ doc.text('Nenhum funcionário cadastrado.', margin, y); y += 14; }
+    efetivo.forEach(r=>{
+      const f = sistemaGlobal.funcionarios.find(x=>String(x.id)===String(r.funcionarioId));
+      const nome = f ? f.nome : '(funcionário removido)';
+      const situacao = r.atestado ? 'Atestado' : (r.faltaJustificada ? 'Falta justificada' : ((r.manha||r.tarde) ? 'Presente' : 'Falta'));
+      doc.text(`• ${nome}${f?' ('+f.funcao+')':''} — ${situacao}`, margin+6, y);
+      y += 12;
+      if(y > pageH - margin - 60){ doc.addPage(); y = margin; }
+    });
+    y += 8;
+
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.text('Atividades realizadas', margin, y); y += 14;
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+    const atividades = e.atividadesEap||[];
+    if(!atividades.length && !(e.atividadesTexto||'').trim()){ doc.text('Nenhuma atividade registrada.', margin, y); y += 14; }
+    atividades.forEach(a=>{
+      const s = orcamento.find(r=>String(r.id)===String(a.subitemId));
+      const label = s ? `${s.numero} ${s.nome}` : '(item removido)';
+      const linhas = doc.splitTextToSize(`• ${label} — ${a.status}`, pageW - margin*2 - 6);
+      doc.text(linhas, margin+6, y); y += 12*linhas.length;
+      if(y > pageH - margin - 60){ doc.addPage(); y = margin; }
+    });
+    if((e.atividadesTexto||'').trim()){
+      const linhas = doc.splitTextToSize(e.atividadesTexto, pageW - margin*2);
+      doc.text(linhas, margin, y); y += 12*linhas.length + 6;
+    }
+    y += 6;
+
+    const materiaisTxt = [];
+    (e.entradaMateriais||[]).forEach(r=>materiaisTxt.push(`Entrada: ${r.item||''} — ${fmtNum(r.qtd||0,2)} ${r.unid||''}${r.obs?' ('+r.obs+')':''}`));
+    (e.saidaMateriais||[]).forEach(r=>materiaisTxt.push(`Saída: ${r.item||''} — ${fmtNum(r.qtd||0,2)} ${r.unid||''}${r.obs?' ('+r.obs+')':''}`));
+    if(materiaisTxt.length){
+      if(y > pageH - margin - 100){ doc.addPage(); y = margin; }
+      doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.text('Movimentação de materiais', margin, y); y += 14;
+      doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+      materiaisTxt.forEach(t=>{
+        doc.text(`• ${t}`, margin+6, y); y += 12;
+        if(y > pageH - margin - 60){ doc.addPage(); y = margin; }
+      });
+      y += 6;
+    }
+
+    if((e.ocorrencias||'').trim()){
+      if(y > pageH - margin - 80){ doc.addPage(); y = margin; }
+      doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.text('Ocorrências / observações', margin, y); y += 14;
+      doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+      const linhas = doc.splitTextToSize(e.ocorrencias, pageW - margin*2);
+      doc.text(linhas, margin, y); y += 12*linhas.length + 6;
+    }
+
+    const fotos = e.fotos||[];
+    if(fotos.length){
+      if(y > pageH - margin - 140){ doc.addPage(); y = margin; }
+      doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.text('Fotos do dia', margin, y); y += 14;
+      const thumbW = 130, thumbH = 100, gap = 12;
+      let x = margin;
+      for(const f of fotos){
+        if(x + thumbW > pageW - margin){ x = margin; y += thumbH + 26; }
+        if(y + thumbH + 26 > pageH - margin){ doc.addPage(); y = margin; x = margin; }
+        const dataUrl = await fotoParaDataUrl(f.driveFileId);
+        if(dataUrl){
+          try{
+            const fmt = /data:image\/png/i.test(dataUrl) ? 'PNG' : /data:image\/webp/i.test(dataUrl) ? 'WEBP' : 'JPEG';
+            doc.addImage(dataUrl, fmt, x, y, thumbW, thumbH);
+          }
+          catch(err){ doc.rect(x,y,thumbW,thumbH); doc.text('(erro ao carregar)', x+6, y+thumbH/2); }
+        } else {
+          doc.rect(x,y,thumbW,thumbH);
+          doc.setFontSize(8); doc.text('(foto indisponível)', x+6, y+thumbH/2);
+        }
+        doc.setFontSize(8); doc.setFont('helvetica','normal');
+        const legendaLinhas = doc.splitTextToSize(f.legenda||'(sem legenda)', thumbW);
+        doc.text(legendaLinhas, x, y+thumbH+11);
+        x += thumbW + gap;
+      }
+    }
+  }
+
+  const nomeArquivo = `diario-obra-${entradas[0].data}-a-${entradas[entradas.length-1].data}.pdf`;
+  doc.save(nomeArquivo);
+}
+
 let sistemaGlobal = { escritorioDescricoes:[], escritorioCustos:[], patrimonio:[], colaboradores:[], funcoesCustom:[], funcionarios:[], salariosPorFuncao:{}, funcoesOperarioCustom:[], bancos:[], deposito:{compras:[], estoqueConsumos:[], estoqueTransferenciasRecebidas:[]} };
 let nextEscDescricaoId = 1;
 let nextEscCustoId = 1;
@@ -4653,6 +4901,63 @@ function setupTelegramConfig(){
   const comprasEl = document.getElementById('cfgTelegramComprasId');
   if(admEl) admEl.addEventListener('input', ()=>{ sistemaGlobal.telegramAdminId = admEl.value.trim(); saveSistemaGlobal(); });
   if(comprasEl) comprasEl.addEventListener('input', ()=>{ sistemaGlobal.telegramComprasId = comprasEl.value.trim(); saveSistemaGlobal(); });
+}
+async function refreshDriveStatus(){
+  const textEl = document.getElementById('driveStatusText');
+  const btnConectar = document.getElementById('btnConectarDrive');
+  const btnDesconectar = document.getElementById('btnDesconectarDrive');
+  if(!textEl) return;
+  try{
+    const resp = await fetch('/api/oauth-google-status');
+    const data = await resp.json();
+    if(data.conectado){
+      textEl.textContent = `✅ Conectado como ${data.email || '(e-mail não identificado)'}`;
+      btnConectar.style.display = 'none';
+      btnDesconectar.style.display = 'inline-block';
+    } else {
+      textEl.textContent = '⚠️ Google Drive ainda não conectado.';
+      btnConectar.style.display = 'inline-block';
+      btnDesconectar.style.display = 'none';
+    }
+  }catch(e){
+    console.error('Status Drive:', e);
+    textEl.textContent = 'Não foi possível verificar a conexão com o Google Drive agora.';
+  }
+}
+function setupDriveConfig(){
+  const btnConectar = document.getElementById('btnConectarDrive');
+  const btnDesconectar = document.getElementById('btnDesconectarDrive');
+  if(btnConectar) btnConectar.addEventListener('click', ()=>{ window.location.href = '/api/oauth-google-start'; });
+  if(btnDesconectar) btnDesconectar.addEventListener('click', async ()=>{
+    if(!confirm('Desconectar o Google Drive? As fotos já enviadas continuam salvas no Drive; novas fotos vão parar de ser enviadas até reconectar.')) return;
+    await fetch('/api/oauth-google-disconnect', {method:'POST'});
+    refreshDriveStatus();
+  });
+
+  // Se voltamos do fluxo do Google (redirect pra #configuracao), já abre essa aba.
+  if(window.location.hash === '#configuracao'){
+    const navBtn = document.querySelector('.navbtn[data-tab="configuracao"]');
+    if(navBtn) navBtn.click();
+  }
+
+  // Se acabamos de voltar do fluxo do Google (redirect com ?drive=... na URL), avisa o usuário.
+  const params = new URLSearchParams(window.location.search);
+  const driveParam = params.get('drive');
+  if(driveParam){
+    const mensagens = {
+      conectado: '✅ Google Drive conectado com sucesso!',
+      negado: 'Conexão com o Google cancelada.',
+      erro_state: 'Não foi possível confirmar a conexão (tente novamente).',
+      sem_code: 'Não foi possível confirmar a conexão (tente novamente).',
+      sem_refresh_token: 'O Google não devolveu a permissão esperada. Tente desconectar sua conta do app em myaccount.google.com/permissions e conectar de novo.',
+      erro: 'Ocorreu um erro ao conectar o Google Drive.'
+    };
+    showToast(mensagens[driveParam] || 'Google Drive: ' + driveParam);
+    params.delete('drive');
+    const novaUrl = window.location.pathname + (params.toString()?('?'+params.toString()):'') + window.location.hash;
+    window.history.replaceState({}, '', novaUrl);
+  }
+  refreshDriveStatus();
 }
 
 /* --- Escritório --- */
@@ -6437,6 +6742,7 @@ function setupTopbar(){
   setupConsolidacaoTab();
   setupAcessosTab();
   setupTelegramConfig();
+  setupDriveConfig();
   setupDiarioTab();
   await setupFuncionariosTab();
   setupGanttToggle();

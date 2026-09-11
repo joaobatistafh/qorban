@@ -94,6 +94,24 @@ create policy "bot lê e grava notas"
   using (bucket_id = 'notas-fiscais')
   with check (bucket_id = 'notas-fiscais');
 
+-- Conexão OAuth do Google Drive, uma linha por empresa. Por enquanto o sistema
+-- só tem uma empresa (empresa_id = 'default'); quando o multi-empresa entrar,
+-- essa tabela já está pronta — só passa a existir uma linha por cliente real.
+create table if not exists public.integracoes_google (
+  empresa_id text primary key,
+  refresh_token text,
+  access_token text,
+  token_expira_em timestamptz,
+  root_folder_id text,
+  conectado_email text,
+  conectado_em timestamptz,
+  atualizado_em timestamptz not null default now()
+);
+
+alter table public.integracoes_google enable row level security;
+drop policy if exists "acesso anon completo" on public.integracoes_google;
+create policy "acesso anon completo" on public.integracoes_google for all to anon using (true) with check (true);
+
 -- Solicitações de compra (fluxo de aprovação), lançadas pelo site ou pelo bot.
 create table if not exists public.solicitacoes_compra (
   id uuid primary key default gen_random_uuid(),

@@ -4297,7 +4297,7 @@ function materialRowHtml(entryId, listName, r){
 function fotoCardHtml(entryId, f){
   return `<div class="foto-card" data-diario="${entryId}" data-fotorow="${f.id}">
     <img src="/api/drive-file?fileId=${encodeURIComponent(f.driveFileId)}" alt="${escapeAttr(f.legenda)}" loading="lazy">
-    <div class="foto-card-caption">${escapeXml(f.legenda||'(sem legenda)')}</div>
+    <input type="text" class="foto-card-caption-input" data-fotolegenda="${f.id}" data-diario="${entryId}" value="${escapeAttr(f.legenda)}" placeholder="Legenda...">
     <button class="icon-btn foto-card-remove" data-fotoremove="${f.id}" data-diario="${entryId}" title="Remover da lista (o arquivo continua no Drive)">✕</button>
   </div>`;
 }
@@ -4367,14 +4367,13 @@ function diarioEntryHtml(e, isOpen){
       </div>
       <div class="qsection">
         <div class="toolbar-row"><h3><span class="tag">fotos</span>Fotos do dia</h3></div>
-        <p class="desc">Salvas automaticamente no Google Drive, em Sistema de obra / Diário de obra / ${escapeXml((document.getElementById('cfgNome')||{}).value || 'obra')}, já nomeadas como "AAAA-MM-DD - Legenda".</p>
+        <p class="desc">Salvas automaticamente no Google Drive, em Sistema de obra / ${escapeXml((document.getElementById('cfgNome')||{}).value || 'obra')} / Diário de obra, já nomeadas como "AAAA-MM-DD - Legenda". Pode selecionar várias fotos de uma vez — a legenda de cada uma é preenchida depois, direto na foto.</p>
         <div class="fotos-grid" id="fotosGrid-${e.id}">
           ${(e.fotos||[]).map(f=>fotoCardHtml(e.id,f)).join('') || '<p class="hint">Nenhuma foto anexada ainda.</p>'}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;">
-          <input type="file" accept="image/*" capture="environment" class="cell" id="fotoInput-${e.id}" style="max-width:220px;">
-          <input type="text" class="cell" id="fotoLegenda-${e.id}" placeholder="Legenda da foto" style="max-width:220px;">
-          <button class="btn small primary" data-diarioaddfoto="${e.id}">Enviar foto</button>
+          <input type="file" accept="image/*" capture="environment" multiple class="cell" id="fotoInput-${e.id}" style="max-width:260px;">
+          <button class="btn small primary" data-diarioaddfoto="${e.id}">Enviar foto(s)</button>
           <span class="hint" id="fotoStatus-${e.id}"></span>
         </div>
       </div>
@@ -4519,11 +4518,10 @@ function bindDiarioEvents(){
       const entry = diarioObra.find(x=>String(x.id)===entryId);
       if(!entry) return;
       const fileInput = document.getElementById(`fotoInput-${entryId}`);
-      const legendaInput = document.getElementById(`fotoLegenda-${entryId}`);
       const statusEl = document.getElementById(`fotoStatus-${entryId}`);
-      const file = fileInput && fileInput.files && fileInput.files[0];
-      if(!file){ if(statusEl) statusEl.textContent = 'Escolha uma foto primeiro.'; return; }
-      uploadFotoDiario(entry, file, legendaInput ? legendaInput.value.trim() : '', statusEl);
+      const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
+      if(!files.length){ if(statusEl) statusEl.textContent = 'Escolha uma ou mais fotos primeiro.'; return; }
+      uploadFotosDiario(entry, files, statusEl);
     });
   });
   wrap.querySelectorAll('[data-fotoremove]').forEach(btn=>{
@@ -4534,6 +4532,9 @@ function bindDiarioEvents(){
       entry.fotos = (entry.fotos||[]).filter(f=>String(f.id)!==btn.dataset.fotoremove);
       renderDiario(); saveProject();
     });
+  });
+  wrap.querySelectorAll('[data-fotolegenda]').forEach(input=>{
+    input.addEventListener('change', ()=>renomearFotoDiario(input.dataset.diario, input.dataset.fotolegenda, input.value.trim(), input));
   });
 }
 async function comprimirImagemParaUpload(file, maxDim, qualidade){
@@ -4560,32 +4561,58 @@ async function comprimirImagemParaUpload(file, maxDim, qualidade){
   const comprimidoDataUrl = canvas.toDataURL('image/jpeg', qualidade);
   return { base64: comprimidoDataUrl.split(',')[1], mimeType: 'image/jpeg' };
 }
-async function uploadFotoDiario(entry, file, legenda, statusEl){
-  if(statusEl) statusEl.textContent = '📤 Enviando pro Google Drive...';
+function avisarDriveNaoConectado(statusEl){
+  if(!statusEl) return;
+  statusEl.innerHTML = '⚠️ Google Drive não conectado. <a href="#" data-irconfig>Conectar agora</a>.';
+  const link = statusEl.querySelector('[data-irconfig]');
+  if(link) link.addEventListener('click', (ev)=>{ ev.preventDefault(); const btn=document.querySelector('.navbtn[data-tab="configuracao"]'); if(btn) btn.click(); });
+}
+async function uploadFotosDiario(entry, files, statusEl){
+  const projectName = (document.getElementById('cfgNome')||{}).value || 'Obra sem nome';
+  let enviados = 0;
+  for(let i=0; i<files.length; i++){
+    const file = files[i];
+    if(statusEl) statusEl.textContent = `📤 Enviando foto ${i+1} de ${files.length}...`;
+    try{
+      const { base64, mimeType } = await comprimirImagemParaUpload(file, 1600, 0.82);
+      const resp = await fetch('/api/drive-upload-foto', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ projectName, dataISO: entry.data || toISO(new Date()), legenda:'', fileBase64: base64, mimeType, fileName: file.name })
+      });
+      const data = await resp.json();
+      if(!resp.ok || !data.ok){
+        if(data.error==='DRIVE_NAO_CONECTADO'){ avisarDriveNaoConectado(statusEl); return; }
+        throw new Error(data.error || 'falha no upload');
+      }
+      entry.fotos = entry.fotos || [];
+      entry.fotos.push({id: nextDiarioSubId++, driveFileId: data.fileId, legenda:'', data: entry.data});
+      enviados++;
+    }catch(e){
+      console.error('Upload foto diário:', e);
+      if(statusEl) statusEl.textContent = `⚠️ Enviei ${enviados} de ${files.length} — deu erro numa das fotos. Tente reenviar a que faltou.`;
+    }
+  }
+  if(statusEl && enviados===files.length) statusEl.textContent = `✅ ${enviados} foto(s) enviada(s). Clique na legenda de cada uma pra descrever.`;
+  renderDiario(); saveProject();
+}
+async function renomearFotoDiario(entryId, fotoId, novaLegenda, inputEl){
+  const entry = diarioObra.find(x=>String(x.id)===entryId);
+  const foto = entry && (entry.fotos||[]).find(f=>String(f.id)===fotoId);
+  if(!entry || !foto) return;
+  foto.legenda = novaLegenda;
+  saveProject();
+  const nomeFinal = `${foto.data || entry.data || toISO(new Date())} - ${novaLegenda || 'sem legenda'}.jpg`;
   try{
-    const { base64, mimeType } = await comprimirImagemParaUpload(file, 1600, 0.82);
-    const projectName = (document.getElementById('cfgNome')||{}).value || 'Obra sem nome';
-    const resp = await fetch('/api/drive-upload-foto', {
+    const resp = await fetch('/api/drive-rename-foto', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ projectName, dataISO: entry.data || toISO(new Date()), legenda, fileBase64: base64, mimeType, fileName: file.name })
+      body: JSON.stringify({ fileId: foto.driveFileId, novoNome: nomeFinal })
     });
     const data = await resp.json();
-    if(!resp.ok || !data.ok){
-      if(data.error==='DRIVE_NAO_CONECTADO'){
-        if(statusEl) statusEl.innerHTML = '⚠️ Google Drive não conectado. <a href="#" data-irconfig>Conectar agora</a>.';
-        const link = statusEl.querySelector('[data-irconfig]');
-        if(link) link.addEventListener('click', (ev)=>{ ev.preventDefault(); const btn=document.querySelector('.navbtn[data-tab="configuracao"]'); if(btn) btn.click(); });
-        return;
-      }
-      throw new Error(data.error || 'falha no upload');
-    }
-    entry.fotos = entry.fotos || [];
-    entry.fotos.push({id: nextDiarioSubId++, driveFileId: data.fileId, legenda, data: entry.data});
-    renderDiario(); saveProject();
+    if(!resp.ok || !data.ok) throw new Error(data.error||'falha ao renomear');
+    if(inputEl){ inputEl.style.borderColor=''; inputEl.title='Salvo'; }
   }catch(e){
-    console.error('Upload foto diário:', e);
-    if(statusEl) statusEl.textContent = '⚠️ Não consegui enviar a foto. Confira a configuração do Google Drive.';
-    else alert('Não consegui enviar a foto pro Google Drive.');
+    console.error('Renomear foto diário:', e);
+    if(inputEl) inputEl.title = 'Legenda salva no sistema, mas não consegui renomear o arquivo no Drive.';
   }
 }
 function diarioSearchableText(e){

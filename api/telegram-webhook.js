@@ -15,6 +15,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE;
 const TIPOS_COMPRA = ['Material', 'Mão de obra', 'Equipamento', 'Extra'];
 const FORMAS_PAGTO = ['PIX', 'Cartão de crédito', 'Cartão de débito', 'Espécie'];
+const { ensureProjectSubfolder, uploadFile, sanitizeFileName } = require('./_google-drive');
 
 module.exports = async (req, res) => {
   let update;
@@ -556,7 +557,38 @@ async function gravarComprasPendentes(chatId, session) {
   }));
   await sb('compras_pendentes', { method: 'POST', body: JSON.stringify(linhas) });
   await clearSession(chatId);
+
+  // Sobe as fotos da nota pro Google Drive também (Sistema de obra / Obra / Notas
+  // fiscais). Isso é um extra — se o Drive não estiver conectado ou der algum
+  // erro, a compra já está registrada de qualquer forma, então não travamos o
+  // fluxo por causa disso.
+  try { await enviarFotosNotaParaDrive(s, header, itens); }
+  catch (e) { console.error('Upload da nota pro Drive:', e); }
+
   return sendText(chatId, `✅ ${linhas.length} item(ns) registrado(s)! Eles vão aparecer no Qorban Controle na próxima vez que você abrir essa obra, na aba de Compras — todos com o número de nota <b>${escapeHtml(header.numero_nota || '—')}</b>.\n\nManda /nova pra lançar outra.`);
+}
+
+async function baixarFotoDoSupabase(path) {
+  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/notas-fiscais/${path}`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!r.ok) throw new Error(`Falha ao baixar foto do Supabase: ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
+async function enviarFotosNotaParaDrive(s, header, itens) {
+  const fotos = s.fotos || [];
+  if (!fotos.length) return;
+
+  const resumoInsumos = truncar(itens.map(it => it.descricao).filter(Boolean).join(', ') || 'compra', 60);
+  const base = sanitizeFileName(`${header.data || 'sem-data'} - ${header.loja || 'loja não identificada'} - ${s.orc_label || 'sem item vinculado'} - ${resumoInsumos}`);
+  const folderId = await ensureProjectSubfolder(s.projeto_nome, 'Notas fiscais');
+
+  for (let i = 0; i < fotos.length; i++) {
+    const nome = fotos.length > 1 ? `${base} - pág ${i + 1}.jpg` : `${base}.jpg`;
+    const buffer = await baixarFotoDoSupabase(fotos[i]);
+    await uploadFile(folderId, nome, 'image/jpeg', buffer);
+  }
 }
 
 /* ---------------- utils ---------------- */

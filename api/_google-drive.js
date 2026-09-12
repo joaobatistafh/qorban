@@ -20,7 +20,7 @@
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE;
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file email';
 const TENANT_PADRAO = 'default'; // ponto único a trocar quando existir multi-empresa de verdade
 
 async function sb(path, opts = {}) {
@@ -116,9 +116,10 @@ async function ensureFolder(empresaId, parentId, name) {
 }
 
 // Garante a cadeia "Sistema de obra (root, criado no Drive do próprio cliente) /
-// Diário de obra / NomeDaObra" e devolve o ID final. A raiz é criada (uma vez)
-// direto na conta conectada — o cliente não precisa compartilhar nada com ninguém.
-async function ensureProjectDiarioFolder(projectName, empresaId = TENANT_PADRAO) {
+// NomeDaObra / NomeDaSubpasta" e devolve o ID final da subpasta. A raiz é criada
+// (uma vez) direto na conta conectada — o cliente não precisa compartilhar nada
+// com ninguém. Usado tanto pro Diário de obra quanto pras Notas fiscais.
+async function ensureProjectSubfolder(projectName, subfolderName, empresaId = TENANT_PADRAO) {
   const conexao = await getConexao(empresaId);
   if (!conexao) throw new Error('DRIVE_NAO_CONECTADO');
 
@@ -134,9 +135,9 @@ async function ensureProjectDiarioFolder(projectName, empresaId = TENANT_PADRAO)
     await salvarConexao(empresaId, { root_folder_id: rootId });
   }
 
-  const diarioFolderId = await ensureFolder(empresaId, rootId, 'Diário de obra');
-  const projectFolderId = await ensureFolder(empresaId, diarioFolderId, projectName || '(obra sem nome)');
-  return projectFolderId;
+  const projectFolderId = await ensureFolder(empresaId, rootId, projectName || '(obra sem nome)');
+  const subfolderId = await ensureFolder(empresaId, projectFolderId, subfolderName);
+  return subfolderId;
 }
 
 // Faz upload de um arquivo (Buffer) pra uma pasta, com o nome já formatado.
@@ -156,6 +157,20 @@ async function uploadFile(parentId, fileName, mimeType, buffer, empresaId = TENA
   return data; // { id, name, webViewLink }
 }
 
+// Renomeia um arquivo já existente no Drive (usado quando o usuário edita a
+// legenda de uma foto depois de já ter enviado).
+async function renameFile(fileId, newName, empresaId = TENANT_PADRAO) {
+  const token = await getAccessToken(empresaId);
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName })
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Falha ao renomear no Drive: ${JSON.stringify(data)}`);
+  return data;
+}
+
 // Baixa os bytes de um arquivo (usado pra exibir fotos no site e embutir no PDF).
 async function getFileMedia(fileId, empresaId = TENANT_PADRAO) {
   const token = await getAccessToken(empresaId);
@@ -166,8 +181,13 @@ async function getFileMedia(fileId, empresaId = TENANT_PADRAO) {
   return r;
 }
 
+// Deixa um nome de arquivo seguro pro Drive/sistemas de arquivo em geral.
+function sanitizeFileName(nome) {
+  return String(nome || '').replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
+}
+
 module.exports = {
   TENANT_PADRAO, DRIVE_SCOPE,
   getConexao, salvarConexao, removerConexao,
-  ensureFolder, ensureProjectDiarioFolder, uploadFile, getFileMedia, getAccessToken
+  ensureFolder, ensureProjectSubfolder, uploadFile, renameFile, getFileMedia, getAccessToken, sanitizeFileName
 };

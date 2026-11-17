@@ -2613,7 +2613,7 @@ function computePrevRealizado(){
     const realTotal = realMdo+realMat+realEquip+realExtra;
     if(prevTotal<=0.0001 && realTotal<=0.0001) return;
     const pct = prevTotal>0 ? (realTotal/prevTotal*100) : (realTotal>0?999:0);
-    rows.push({ nome:`${r.numero} ${r.nome}`, prevMdo, realMdo, prevMat, realMat, prevEquip, realEquip, realExtra, prevTotal, realTotal, pct });
+    rows.push({ nome:`${r.numero} ${r.nome}`, prevMdo, realMdo, prevMat, realMat, prevEquip, realEquip, realExtra, prevTotal, realTotal, pct, pctObra: subitemProgress(r.id) });
   });
   return rows;
 }
@@ -2629,8 +2629,9 @@ function renderPrevRealizado(){
         ${cell(r.prevMat)}${cell(r.realMat)}
         ${cell(r.prevEquip)}${cell(r.realEquip)}
         ${cell(r.realExtra)}
-        <td class="num"><span class="badge ${cls}">${r.prevTotal>0?fmtNum(r.pct,0)+'%':'-'}</span></td></tr>`;
-    }).join('') : `<tr><td colspan="9" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
+        <td class="num"><span class="badge ${cls}">${r.prevTotal>0?fmtNum(r.pct,0)+'%':'-'}</span></td>
+        ${r.pctObra===null ? '<td class="num" style="color:var(--text-faint)" title="Em andamento, sem % informado no Diário de obra">—</td>' : `<td class="num" style="font-family:var(--mono)">${fmtNum(r.pctObra,0)}%</td>`}</tr>`;
+    }).join('') : `<tr><td colspan="10" style="color:var(--text-faint);text-align:center;padding:20px;">Sem dados ainda</td></tr>`;
   }
   const canvas = document.getElementById('chartPrevRealizado');
   if(prevRealChart){ prevRealChart.destroy(); prevRealChart=null; }
@@ -4263,13 +4264,30 @@ function subitemLatestStatus(subitemId){
   });
   return status;
 }
+/* % concluído do subitem na obra, a partir do Diário de obra (último registro).
+   Concluída = 100. Nunca lançado = 0. Em andamento sem % informado = null. */
+function subitemProgress(subitemId){
+  let found = false, pct = null;
+  const sorted = [...diarioObra].sort((a,b)=>(a.data||'').localeCompare(b.data||'') || (a.numero-b.numero));
+  sorted.forEach(e=>{
+    const item = (e.atividadesEap||[]).find(a=>String(a.subitemId)===String(subitemId));
+    if(!item) return;
+    found = true;
+    if(item.status==='Concluída') pct = 100;
+    else if(typeof item.pct==='number') pct = item.pct;
+    else if(pct===100) pct = null;
+  });
+  return found ? pct : 0;
+}
 function atividadeEapRowHtml(entryId, a){
   const s = orcamento.find(r=>String(r.id)===String(a.subitemId));
   const nome = s ? `${s.numero} ${s.nome}` : '(subitem removido)';
+  const concl = a.status==='Concluída';
+  const pctVal = concl ? 100 : (typeof a.pct==='number' ? a.pct : '');
   return `<tr><td>${escapeXml(nome)}</td><td><select class="cell" data-eapstatus="${a.subitemId}" data-diario="${entryId}">
     <option value="Em andamento" ${a.status==='Em andamento'?'selected':''}>Em andamento</option>
     <option value="Concluída" ${a.status==='Concluída'?'selected':''}>Concluída</option>
-  </select></td><td><button class="icon-btn" data-eapremove="${a.subitemId}" data-diario="${entryId}" title="Remover">✕</button></td></tr>`;
+  </select></td><td class="num"><input type="number" min="0" max="100" step="any" class="cell small nospin" data-eappct="${a.subitemId}" data-diario="${entryId}" value="${pctVal}" placeholder="%" ${concl?'disabled':''} title="% concluído deste subitem na obra (acumulado até este dia)"></td><td><button class="icon-btn" data-eapremove="${a.subitemId}" data-diario="${entryId}" title="Remover">✕</button></td></tr>`;
 }
 function migrateDiarioEntry(e){
   if(e.atividadesTexto===undefined){
@@ -4347,8 +4365,8 @@ function diarioEntryHtml(e, isOpen){
             </select>
           </div>
         </div>
-        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Subitem</th><th style="width:170px;">Status</th><th style="width:34px;"></th></tr></thead>
-          <tbody>${(e.atividadesEap||[]).map(a=>atividadeEapRowHtml(e.id,a)).join('') || '<tr><td colspan="3" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhuma atividade adicionada ainda.</td></tr>'}</tbody>
+        <div class="tbl-wrap"><table class="qtbl zebra"><thead><tr><th>Subitem</th><th style="width:170px;">Status</th><th class="num" style="width:90px;">% concluído</th><th style="width:34px;"></th></tr></thead>
+          <tbody>${(e.atividadesEap||[]).map(a=>atividadeEapRowHtml(e.id,a)).join('') || '<tr><td colspan="4" style="color:var(--text-faint);text-align:center;padding:14px;">Nenhuma atividade adicionada ainda.</td></tr>'}</tbody>
         </table></div>
         <textarea class="cell" style="width:100%;min-height:70px;font-family:var(--sans);margin-top:12px;" data-df="atividadesTexto" data-diario="${e.id}" placeholder="Observações gerais sobre as atividades do dia...">${escapeXml(e.atividadesTexto)}</textarea>
       </div>
@@ -4423,7 +4441,10 @@ function bindDiarioEvents(){
       const entry = diarioObra.find(x=>String(x.id)===el.dataset.diarioaddatividade);
       if(!entry) return;
       entry.atividadesEap = entry.atividadesEap || [];
-      entry.atividadesEap.push({subitemId: el.value, status:'Em andamento'});
+      const novaAtiv = {subitemId: el.value, status:'Em andamento'};
+      const ultimoPct = subitemProgress(el.value);
+      if(typeof ultimoPct==='number' && ultimoPct>0 && ultimoPct<100) novaAtiv.pct = ultimoPct;
+      entry.atividadesEap.push(novaAtiv);
       renderDiario(); saveProject();
     });
   });
@@ -4432,7 +4453,26 @@ function bindDiarioEvents(){
       const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
       if(!entry) return;
       const item = (entry.atividadesEap||[]).find(a=>String(a.subitemId)===el.dataset.eapstatus);
-      if(item) item.status = el.value;
+      if(item){
+        item.status = el.value;
+        if(item.status==='Concluída') item.pct = 100;
+        else if(item.pct===100) delete item.pct;
+      }
+      renderDiario(); saveProject();
+    });
+  });
+  wrap.querySelectorAll('[data-eappct]').forEach(el=>{
+    el.addEventListener('change', ()=>{
+      const entry = diarioObra.find(x=>String(x.id)===el.dataset.diario);
+      if(!entry) return;
+      const item = (entry.atividadesEap||[]).find(a=>String(a.subitemId)===el.dataset.eappct);
+      if(!item) return;
+      const v = parseFloat(String(el.value).replace(',','.'));
+      if(isNaN(v)) delete item.pct;
+      else {
+        item.pct = Math.max(0, Math.min(100, v));
+        if(item.pct>=100){ item.pct = 100; item.status = 'Concluída'; }
+      }
       renderDiario(); saveProject();
     });
   });
@@ -4456,7 +4496,9 @@ function bindDiarioEvents(){
       const existentes = new Set(entry.atividadesEap.map(a=>String(a.subitemId)));
       (ontem.atividadesEap||[]).forEach(a=>{
         if(!existentes.has(String(a.subitemId))){
-          entry.atividadesEap.push({subitemId:a.subitemId, status:'Em andamento'});
+          const copia = {subitemId:a.subitemId, status:'Em andamento'};
+          if(a.status!=='Concluída' && typeof a.pct==='number') copia.pct = a.pct;
+          entry.atividadesEap.push(copia);
           existentes.add(String(a.subitemId));
         }
       });
@@ -4760,7 +4802,7 @@ async function gerarPdfDiario(entradas){
     atividades.forEach(a=>{
       const s = orcamento.find(r=>String(r.id)===String(a.subitemId));
       const label = s ? `${s.numero} ${s.nome}` : '(item removido)';
-      const linhas = doc.splitTextToSize(`• ${label} — ${a.status}`, pageW - margin*2 - 6);
+      const linhas = doc.splitTextToSize(`• ${label} — ${a.status}${(a.status!=='Concluída' && typeof a.pct==='number') ? ' ('+fmtNum(a.pct,0)+'%)' : ''}`, pageW - margin*2 - 6);
       doc.text(linhas, margin+6, y); y += 12*linhas.length;
       if(y > pageH - margin - 60){ doc.addPage(); y = margin; }
     });
@@ -4845,7 +4887,7 @@ const SYSTEM_PAGES = [
 ];
 const PATRIMONIO_CATEGORIAS = ['Máquina','Equipamento','Veículo','Ferramenta','Imóvel','Móvel/Utensílio','Outro'];
 const PATRIMONIO_STATUS = ['Em uso','Em manutenção','Parado','Vendido','Baixado'];
-const FUNCAO_COLAB_BASE = ['Secretaria','Financeiro','Estagiário','Compras','Mestre','Técnico de edificações','Sócio-administrador'];
+const FUNCAO_COLAB_BASE = ['Secretaria','Financeiro','Estagiário','Compras','Mestre','Técnico de edificações','Sócio-administrador','Cliente'];
 const FUNCOES_OPERARIO_BASE = [
   'Servente','Pedreiro','Carpinteiro','Armador','Eletricista','Encanador','Pintor','Gesseiro','Azulejista','Vidraceiro',
   'Soldador','Marmorista','Impermeabilizador','Ferramenteiro','Operador de máquina','Motorista','Ajudante geral','Vigia',
@@ -4864,13 +4906,22 @@ async function doSaveSistemaGlobal(){
   catch(e){ console.error('Erro ao salvar dados globais:', e); }
   try{ localStorage.setItem('qorban_sistema_global', JSON.stringify(sistemaGlobal)); }catch(e){}
 }
-function seedColaboradorPadrao(){
-  if(sistemaGlobal.colaboradores.length) return;
+/* Admin (tabela admins no banco) sempre existe no menu Acessos, com acesso total. */
+function garantirAdminColaborador(email){
+  if(!email) return;
+  email = email.toLowerCase();
+  if(sistemaGlobal.colaboradores.some(c=>(c.email||'').toLowerCase()===email)) return;
   const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]={ver:true,editar:true});
-  sistemaGlobal.colaboradores.push({
-    id: nextColaboradorId++, nome:'João Rios', data:'2026-01-28', funcao:'Sócio-administrador',
-    email:'joaobatistafh@gmail.com', senha:'joao', senhaTemporaria:true, permissoes: perms
+  sistemaGlobal.colaboradores.push({id: nextColaboradorId++, nome:'Administrador', data: toISO(new Date()), funcao:'Sócio-administrador', email, permissoes: perms});
+  saveSistemaGlobal();
+}
+/* Versões antigas guardavam uma "senha padrão" em texto puro no cadastro. Remove de vez. */
+function limparSenhasLegadas(){
+  let mudou = false;
+  (sistemaGlobal.colaboradores||[]).forEach(c=>{
+    if('senha' in c || 'senhaTemporaria' in c){ delete c.senha; delete c.senhaTemporaria; mudou = true; }
   });
+  if(mudou) saveSistemaGlobal();
 }
 async function refreshObrasCache(){
   try{ obrasCache = await supaListProjects(); }catch(e){ console.error('Obras cache:', e); }
@@ -4902,7 +4953,7 @@ async function loadSistemaGlobal(){
   nextDepositoConsumoId = sistemaGlobal.deposito.estoqueConsumos.reduce((m,u)=>Math.max(m,u.id||0),0)+1;
   sistemaGlobal.bancos = (sistemaGlobal.bancos||[]).map((b,i)=> typeof b==='string' ? {id: Date.now()+i, banco:b, agencia:'', conta:'', operacao:'', nome:b, saldoAtual:0} : b);
   nextBancoId = sistemaGlobal.bancos.reduce((m,b)=>Math.max(m,b.id||0),0)+1;
-  seedColaboradorPadrao();
+  limparSenhasLegadas();
   await refreshObrasCache();
   renderEmpresaAll();
   try{ renderDiario(); }catch(e){}
@@ -5390,9 +5441,8 @@ function funcaoOptionsHtml(selected){
   if(selected && !opts.includes(selected)) extra = `<option selected>${escapeXml(selected)}</option>`;
   return opts.map(f=>`<option ${f===selected?'selected':''}>${escapeXml(f)}</option>`).join('') + extra + `<option value="__add_funcao__">+ Adicionar novo</option>`;
 }
-function gerarSenhaPadrao(nome){
-  const primeiro = (nome||'').trim().split(/\s+/)[0] || '';
-  return primeiro.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+function obraClienteOptionsHtml(selected){
+  return `<option value="">— escolha a obra —</option>` + obrasCache.map(o=>`<option value="${o.id}" ${o.id===selected?'selected':''}>${escapeXml(o.nome||'(sem nome)')}</option>`).join('');
 }
 function colaboradorRowHtml(c){
   return `<tr data-colab="${c.id}">
@@ -5400,7 +5450,7 @@ function colaboradorRowHtml(c){
     <td><input type="date" class="cell" data-cbf="data" data-colab="${c.id}" value="${c.data||''}"></td>
     <td><select class="cell" data-cbf="funcao" data-colab="${c.id}">${funcaoOptionsHtml(c.funcao)}</select></td>
     <td><input type="email" class="cell" data-cbf="email" data-colab="${c.id}" value="${escapeAttr(c.email)}"></td>
-    <td><span class="badge ${c.senhaTemporaria?'warn':'ok'}" style="font-family:var(--mono)" title="${c.senhaTemporaria?'Senha padrão — precisa trocar no 1º acesso':'Senha já alterada'}">${escapeXml(c.senha)}${c.senhaTemporaria?' ⚠':''}</span></td>
+    <td>${c.funcao==='Cliente' ? `<select class="cell" data-cbf="obraId" data-colab="${c.id}">${obraClienteOptionsHtml(c.obraId)}</select>` : '<span class="hint">—</span>'}</td>
     <td><button class="icon-btn" data-colabremove="${c.id}" title="Remover">✕</button></td>
   </tr>`;
 }
@@ -5420,9 +5470,11 @@ function bindColaboradorEvents(){
         renderColaboradores(); saveSistemaGlobal();
         return;
       }
-      if(f==='nome'){
-        c.nome = el.value;
-        if(c.senhaTemporaria) c.senha = gerarSenhaPadrao(el.value) || c.senha;
+      if(f==='email'){
+        const v = el.value.trim().toLowerCase();
+        if(v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)){ showToast('E-mail inválido.'); renderColaboradores(); return; }
+        if(v && sistemaGlobal.colaboradores.some(x=>x!==c && (x.email||'').toLowerCase()===v)){ showToast('Esse e-mail já está cadastrado.'); renderColaboradores(); return; }
+        c.email = v;
       } else {
         c[f] = el.value;
       }
@@ -5445,11 +5497,15 @@ function renderColaboradores(){
   bindColaboradorEvents();
   renderPermissoes();
 }
-function addColaborador(){
-  const nome = (prompt('Nome do funcionário:')||'').trim();
+function addColaborador(tipo){
+  const cliente = tipo==='cliente';
+  const nome = (prompt(cliente ? 'Nome do cliente:' : 'Nome do funcionário:')||'').trim();
   if(!nome) return;
+  const email = (prompt('E-mail de acesso (a pessoa cria a própria senha no primeiro acesso):')||'').trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ showToast('E-mail inválido — cadastro cancelado.'); return; }
+  if(sistemaGlobal.colaboradores.some(c=>(c.email||'').toLowerCase()===email)){ showToast('Esse e-mail já está cadastrado.'); return; }
   const perms = {}; SYSTEM_PAGES.forEach(p=>perms[p.id]={ver:false,editar:false});
-  sistemaGlobal.colaboradores.push({id: nextColaboradorId++, nome, data: toISO(new Date()), funcao:'Estagiário', email:'', senha: gerarSenhaPadrao(nome), senhaTemporaria:true, permissoes: perms});
+  sistemaGlobal.colaboradores.push({id: nextColaboradorId++, nome, data: toISO(new Date()), funcao: cliente ? 'Cliente' : 'Estagiário', email, permissoes: perms});
   renderColaboradores(); saveSistemaGlobal();
 }
 /* Migra o modelo antigo (booleano) de permissões para {ver, editar} */
@@ -5468,10 +5524,11 @@ function renderPermissoes(){
   const tbody = document.getElementById('tbodyPermissoes');
   const emptyEl = document.getElementById('emptyPermissoes');
   if(!theadTop || !theadSub || !tbody) return;
-  if(emptyEl) emptyEl.style.display = sistemaGlobal.colaboradores.length ? 'none':'block';
+  const equipe = sistemaGlobal.colaboradores.filter(c=>c.funcao!=='Cliente');
+  if(emptyEl) emptyEl.style.display = equipe.length ? 'none':'block';
   theadTop.innerHTML = `<th rowspan="2" style="min-width:160px;">Funcionário</th>` + SYSTEM_PAGES.map(p=>`<th colspan="2" style="text-align:center;font-size:9.5px;">${p.label}</th>`).join('');
   theadSub.innerHTML = SYSTEM_PAGES.map(()=>`<th style="width:38px;text-align:center;font-size:9px;color:var(--text-faint);">Ver</th><th style="width:38px;text-align:center;font-size:9px;color:var(--text-faint);">Edit.</th>`).join('');
-  tbody.innerHTML = sistemaGlobal.colaboradores.map(c=>{
+  tbody.innerHTML = equipe.map(c=>{
     normalizePermissoes(c);
     const nomeCell = `<td>${escapeXml(c.nome)} <span class="hint">— ${escapeXml(c.funcao||'')}</span></td>`;
     const cells = SYSTEM_PAGES.map(p=>{
@@ -5495,8 +5552,38 @@ function renderPermissoes(){
     });
   });
 }
+/* Aplica o que o menu Acessos define para o e-mail logado: esconde páginas sem "Ver" e deixa
+   somente-consulta as páginas sem "Edit.". Obs.: a trava de edição é de interface; no banco o
+   acesso é por "equipe" (RLS), porque os dados de cada obra ficam num único registro. */
+function travarPainel(panel){
+  const lock = ()=> panel.querySelectorAll('input:not([type=search]),select,textarea,button.primary,button.icon-btn,button.danger').forEach(el=>{ if(!el.disabled) el.disabled = true; });
+  lock();
+  new MutationObserver(lock).observe(panel, {childList:true, subtree:true});
+}
+function aplicarAcessoUsuario(acesso){
+  const email = (acesso.email||'').toLowerCase();
+  if(acesso.admin) garantirAdminColaborador(email);
+  const colab = sistemaGlobal.colaboradores.find(c=>(c.email||'').toLowerCase()===email);
+  const perm = pid=>{
+    if(acesso.admin) return {ver:true, editar:true};
+    if(!colab) return {ver:false, editar:false};
+    normalizePermissoes(colab);
+    return colab.permissoes[pid] || {ver:false, editar:false};
+  };
+  document.querySelectorAll('.navbtn[data-tab]').forEach(b=>{ b.style.display = perm(b.dataset.tab).ver ? '' : 'none'; });
+  SYSTEM_PAGES.forEach(sp=>{
+    const p = perm(sp.id), panel = document.getElementById('panel-'+sp.id);
+    if(panel && p.ver && !p.editar) travarPainel(panel);
+  });
+  const ativo = document.querySelector('.navbtn.active');
+  if(!ativo || ativo.style.display==='none'){
+    const primeiro = [...document.querySelectorAll('.navbtn[data-tab]')].find(b=>b.style.display!=='none');
+    if(primeiro) primeiro.click();
+  }
+}
 function setupAcessosTab(){
-  document.getElementById('btnAddColaborador').addEventListener('click', addColaborador);
+  document.getElementById('btnAddColaborador').addEventListener('click', ()=>addColaborador('funcionario'));
+  document.getElementById('btnAddCliente').addEventListener('click', ()=>addColaborador('cliente'));
 }
 
 /* --- Funcionários --- */
@@ -6240,6 +6327,8 @@ function setupConsolidacaoTab(){
 const SUPABASE_URL = 'https://kbuiljbrrvdabwtdwayp.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_psFslciJm9QIZTBkCiF77Q_SxA0hTaA';
 const SUPA_HEADERS = { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' };
+/* Depois do login, todas as chamadas ao banco usam o token do usuário (a chave pública sozinha não lê nada). */
+Auth.onToken = function(t){ SUPA_HEADERS['Authorization'] = 'Bearer ' + (t || SUPABASE_KEY); };
 const LOCAL_PTR_KEY = 'controle_sinapi:current_project_id';
 const LOCAL_CACHE_KEY = 'controle_sinapi:cache';
 let currentProjectId = null;
@@ -6252,7 +6341,9 @@ function setSyncStatus(text, isError){
   el.style.color = isError ? 'var(--red)' : 'var(--text-faint)';
 }
 async function supaRequest(path, options){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {headers: SUPA_HEADERS, ...options});
+  const go = ()=> fetch(`${SUPABASE_URL}/rest/v1/${path}`, {headers: SUPA_HEADERS, ...options, ...(options && options.headers ? {headers:{...options.headers, 'Authorization': SUPA_HEADERS['Authorization']}} : {})});
+  let res = await go();
+  if(res.status===401 && await Auth.refresh()) res = await go();
   if(!res.ok){ const body = await res.text().catch(()=> ''); throw new Error(`Supabase ${res.status}: ${body}`); }
   return res.status===204 ? null : res.json();
 }
@@ -6650,7 +6741,7 @@ async function createNewProject(){
   if(!nome) return;
   currentProjectId = crypto.randomUUID();
   try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
-  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; resetQuantitativosExtra(); diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+  resetProjectState();
   try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
   applyConfig({nome, createdAt: new Date().toISOString()});
   document.getElementById('bdiPercent').value = 0;
@@ -6658,12 +6749,15 @@ async function createNewProject(){
   const usarEap = await showModal(
     'EAP Padrão',
     'Quer começar este orçamento com a <b>EAP Padrão</b> (estrutura de itens e subitens já pronta, com alguns códigos SINAPI preenchidos)? Você pode editar tudo depois.',
-    [ {label:'Começar em branco', value:'nao'}, {label:'Usar EAP Padrão', value:'sim', primary:true} ]
+    [ {label:'Começar em branco', value:'nao'}, {label:'Importar planilha', value:'importar'}, {label:'Usar EAP Padrão', value:'sim', primary:true} ]
   );
   if(usarEap==='sim'){
     setOrcLoadStatus('carregando EAP Padrão…');
     try{ await loadEapPadraoIntoOrcamento(); setOrcLoadStatus(''); }
     catch(e){ console.error(e); setOrcLoadStatus('não consegui carregar a EAP Padrão (eap_padrao.json) — comece manualmente.', true); }
+  } else if(usarEap==='importar'){
+    const res = await openImportOrcamentoModal({novoProjeto:true});
+    if(res) applyOrcamentoImport(res);
   }
   renderCalendarTab();
   recalcAll();
@@ -6680,7 +6774,7 @@ async function deleteCurrentProject(){
     showToast('Obra excluída.');
     const had = await loadProject();
     if(!had){
-      orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; resetQuantitativosExtra(); diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+      resetProjectState();
       applyConfig({nome:'Nova obra', createdAt: new Date().toISOString()});
       await doSaveProject();
     }
@@ -6695,6 +6789,253 @@ function setOrcLoadStatus(text, isError){
   if(!el) return;
   el.textContent = text;
   el.style.color = isError ? 'var(--red)' : 'var(--text-faint)';
+}
+
+/* ============================================================
+   16b. IMPORTAÇÃO DE ORÇAMENTO (planilha XLSX modelo)
+   ============================================================ */
+const IMPORT_MODELO_URL = 'modelo_importacao_orcamento.xlsx';
+
+function resetProjectState(){
+  orcamento = []; nextOrcId = 1; bdiPercent = 0; calendar = defaultCalendar(); compras = []; nextCompraId = 1; recebimentos = []; nextRecebId = 1; antecipacao = {}; estoqueConsumos = []; nextEstoqueConsumoId = 1; estoqueTransferenciasRecebidas = []; composicoesProprias = []; nextComposicaoId = 1; compEditingId = null; revestimentos = []; nextRevestimentoId = 1; alvenariaRows = []; nextAlvenariaId = 1; muroRows = []; nextMuroId = 1; customRevestTipos = []; resetQuantitativosExtra(); diarioObra = []; nextDiarioId = 1; nextDiarioSubId = 1;
+}
+function impNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function impBlank(v){ return v===null || v===undefined || String(v).trim()===''; }
+/* número em formato BR ("1.234,56") ou número do Excel; null = vazio, NaN = inválido */
+function impNum(v){
+  if(v===null || v===undefined || v==='') return null;
+  if(typeof v==='number') return isFinite(v) ? v : NaN;
+  let s = String(v).trim().replace(/[R$\s%]/g,'');
+  if(!s) return null;
+  if(s.includes(',')) s = s.replace(/\./g,'').replace(',','.');
+  const n = Number(s);
+  return isNaN(n) ? NaN : n;
+}
+function impHeaderKey(h){
+  const n = impNorm(h);
+  if(!n) return null;
+  if(n.startsWith('seq')) return 'seq';
+  if(n==='nivel') return 'nivel';
+  if(/^(discriminacao|descricao|nome)/.test(n)) return 'nome';
+  if(/^quant/.test(n)) return 'quant';
+  if(/^unid/.test(n)) return 'unid';
+  if(/sinapi|composicao|codigo/.test(n)) return 'sinapi';
+  if(/^taxa.*mdo/.test(n)) return 'taxaMdo';
+  if(/^taxa.*mat/.test(n)) return 'taxaMat';
+  if(/^taxa.*equip/.test(n)) return 'taxaEquip';
+  if(/^mdo/.test(n)) return 'mdo';
+  if(/^mat/.test(n)) return 'mat';
+  if(/^equip/.test(n)) return 'equip';
+  if(/^predec/.test(n)) return 'pred';
+  return null;
+}
+
+/* Lê o workbook (modelo preenchido) e devolve {nome, bdi, rows, errors, warnings, counts, totSemBdi}.
+   Não altera nenhum estado do app. */
+function parseOrcamentoImport(wb){
+  const out = {nome:'', bdi:0, rows:[], errors:[], warnings:[], counts:{item:0, principal:0, subitem:0}, totSemBdi:0};
+  const findSheet = nm => { const n = wb.SheetNames.find(s=>impNorm(s)===nm); return n ? wb.Sheets[n] : null; };
+
+  const wsD = findSheet('dados da obra');
+  if(wsD){
+    XLSX.utils.sheet_to_json(wsD, {header:1, raw:true, defval:null}).forEach(r=>{
+      const k = impNorm(r[0]);
+      if(k==='nome da obra' && !impBlank(r[1])) out.nome = String(r[1]).trim();
+      if(k==='bdi' && !impBlank(r[1])){
+        let v = impNum(r[1]);
+        if(v===null || isNaN(v) || v<0) out.warnings.push('BDI inválido na aba "Dados da obra" — usei 0%.');
+        else {
+          if(v>0 && v<1){ out.warnings.push(`BDI lido como fração (${v}) — convertido para ${fmtNum(v*100,2)}%.`); v = v*100; }
+          out.bdi = v;
+        }
+      }
+    });
+  }
+
+  const ws = findSheet('orcamento');
+  if(!ws){ out.errors.push('Não encontrei a aba "Orçamento". Use a planilha modelo.'); return out; }
+  const aoa = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+  let hIdx = -1, col = {};
+  for(let i=0; i<Math.min(aoa.length,20); i++){
+    const m = {};
+    (aoa[i]||[]).forEach((h,j)=>{ const k = impHeaderKey(h); if(k && !(k in m)) m[k] = j; });
+    if('nivel' in m && 'nome' in m){ hIdx = i; col = m; break; }
+  }
+  if(hIdx<0){ out.errors.push('Não encontrei os títulos "Nível" e "Discriminação do evento" na aba Orçamento. Use a planilha modelo.'); return out; }
+
+  const get = (r,k)=> (k in col) ? r[col[k]] : null;
+  const dataKeys = ['nivel','nome','quant','unid','sinapi','mdo','taxaMdo','mat','taxaMat','equip','taxaEquip','pred'];
+  let hasItem = false, seq = 0, ignoradas = 0;
+  const preds = [];
+
+  for(let i=hIdx+1; i<aoa.length; i++){
+    const r = aoa[i]||[]; const ln = i+1;
+    if(dataKeys.every(k=>impBlank(get(r,k)))) continue;
+    const nivelRaw = get(r,'nivel'), nl = impNorm(nivelRaw);
+    const level = nl==='item' ? 'item' : nl==='subitem principal' ? 'subitem_principal' : nl==='subitem' ? 'subitem' : null;
+    const nome = impBlank(get(r,'nome')) ? '' : String(get(r,'nome')).trim();
+    if(!level){ out.errors.push(`Linha ${ln}: Nível ${impBlank(nivelRaw) ? 'vazio' : 'inválido ("'+nivelRaw+'")'} — use Item, Subitem principal ou Subitem.`); continue; }
+    if(!nome){ out.errors.push(`Linha ${ln}: falta a Discriminação do evento.`); continue; }
+    if(level==='item') hasItem = true;
+    else if(!hasItem){ out.errors.push(`Linha ${ln}: "${nome}" aparece antes de qualquer Item.`); continue; }
+
+    const f = {nome, quant:0, unidade:'', sinapiCode:'', mdo:0, taxaMdo:0, mat:0, taxaMat:0, equip:0, taxaEquipPct:0, predText:''};
+    let usaSinapi = false;
+
+    if(level==='subitem'){
+      seq++;
+      [['quant','quant','Quant.'],['mdo','mdo','MDO'],['taxaMdo','taxaMdo','Taxa extra MDO'],['mat','mat','MAT'],
+       ['taxaMat','taxaMat','Taxa extra MAT'],['equip','equip','EQUIP'],['taxaEquipPct','taxaEquip','Taxa extra EQUIP']].forEach(([dst,src,label])=>{
+        const raw = get(r,src), v = impNum(raw);
+        if(v===null) return;
+        if(isNaN(v) || v<0){ out.errors.push(`Linha ${ln}: valor inválido em ${label} ("${raw}").`); return; }
+        f[dst] = v;
+      });
+      if(!impBlank(get(r,'unid'))) f.unidade = String(get(r,'unid')).trim();
+
+      const rawCode = get(r,'sinapi');
+      if(!impBlank(rawCode)){
+        const digits = typeof rawCode==='number' ? String(Math.round(rawCode)) : String(rawCode).replace(/\D/g,'');
+        if(digits){
+          f.sinapiCode = digits;
+          if(!DB.items[parseInt(digits,10)]) out.warnings.push(`Linha ${ln}: código SINAPI ${digits} não existe na base carregada — o subitem entra sem composição.`);
+        } else out.warnings.push(`Linha ${ln}: código SINAPI "${rawCode}" ignorado (use só números).`);
+      }
+      usaSinapi = !!f.sinapiCode && !f.mdo && !f.mat && !f.equip;
+
+      const rawPred = get(r,'pred');
+      if(!impBlank(rawPred)){
+        if(typeof rawPred==='number' && !Number.isInteger(rawPred))
+          out.warnings.push(`Linha ${ln}: Predecessoras "${rawPred}" foi lida como número decimal e foi ignorada. Formate a coluna como Texto e separe com vírgula.`);
+        else { f.predText = String(rawPred).trim(); preds.push({ln, seq, text:f.predText}); }
+      }
+
+      // total estimado (sem BDI)
+      let mdo = f.mdo, mat = f.mat, eq = f.equip;
+      const code = parseInt(f.sinapiCode,10);
+      if(usaSinapi && code && DB.items[code]){
+        try{ const pb = priceBreakdownUnit(code); mdo = pb.mdo; mat = pb.mat; eq = pb.equip; }catch(e){}
+      }
+      out.totSemBdi += f.quant * ((mdo||0) + f.taxaMdo + (mat||0) + f.taxaMat + (eq||0)*(1+f.taxaEquipPct/100));
+      out.counts.subitem++;
+    } else {
+      if(['quant','mdo','mat','equip'].some(k=>!impBlank(get(r,k)))) ignoradas++;
+      if(level==='item') out.counts.item++; else out.counts.principal++;
+    }
+    out.rows.push({level, fields:f, usaSinapi});
+  }
+
+  preds.forEach(p=>{
+    const toks = p.text.split(',').map(s=>s.trim()).filter(Boolean);
+    const ps = parsePreds(p.text);
+    if(ps.length!==toks.length) out.warnings.push(`Linha ${p.ln}: Predecessoras "${p.text}" fora do formato (ex.: 3, 5+2).`);
+    else if(ps.some(x=>x.seq<1 || x.seq>seq || x.seq===p.seq)) out.warnings.push(`Linha ${p.ln}: Predecessoras "${p.text}" aponta para uma atividade inexistente ou para ela mesma.`);
+  });
+  if(ignoradas) out.warnings.push(`${ignoradas} linha(s) de Item/Subitem principal tinham quantidade ou custos — esses valores foram ignorados (só Subitem usa).`);
+  if(!out.rows.length && !out.errors.length) out.errors.push('A aba Orçamento não tem linhas preenchidas.');
+  return out;
+}
+
+function importSummaryHtml(res){
+  const lista = (arr, cor, max)=> arr.length
+    ? `<ul style="margin:6px 0 0 18px;padding:0;color:${cor};">${arr.slice(0,max).map(x=>`<li>${escapeXml(x)}</li>`).join('')}${arr.length>max ? `<li>…e mais ${arr.length-max}</li>` : ''}</ul>` : '';
+  let h = '';
+  if(res.errors.length){
+    h += `<div style="color:var(--red);font-weight:600;">Corrija a planilha e envie de novo (${res.errors.length} problema${res.errors.length>1?'s':''}):</div>${lista(res.errors,'var(--red)',12)}`;
+  } else {
+    const c = res.counts, mul = 1+(res.bdi||0)/100;
+    h += `<div>${c.item} item(ns) · ${c.principal} subitem(ns) principal(is) · ${c.subitem} subitem(ns) · BDI ${fmtNum(res.bdi||0,2)}%<br>Total sem BDI: R$ ${fmtNum(res.totSemBdi,2)} · com BDI: R$ ${fmtNum(res.totSemBdi*mul,2)}</div>`;
+  }
+  if(res.warnings.length) h += `<div style="color:#e8a33d;margin-top:8px;font-weight:600;">Avisos (${res.warnings.length}) — a importação continua:</div>${lista(res.warnings,'#e8a33d',8)}`;
+  return h;
+}
+
+/* Modal: baixar modelo + escolher arquivo. Resolve com o resultado do parse (sem erros) ou null. */
+function openImportOrcamentoModal(opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const overlay = document.getElementById('modalOverlay');
+    const box = document.getElementById('modalBox');
+    box.style.maxWidth = '560px';
+    box.innerHTML = `
+      <h3>Importação de orçamento</h3>
+      <p style="margin-bottom:12px;">Baixe a planilha modelo, preencha e envie aqui. O orçamento importado entra ${opts.novoProjeto ? 'nesta nova obra' : 'em um <b>novo projeto</b>'}.</p>
+      <p style="margin-bottom:12px;"><a class="btn small" href="${IMPORT_MODELO_URL}" download>⇩ Baixar planilha modelo (.xlsx)</a></p>
+      ${opts.askName ? '<input type="text" id="impNome" class="cell" placeholder="Nome da nova obra (vazio = nome da planilha)" autocomplete="off">' : ''}
+      <input type="file" id="impFile" class="cell" accept=".xlsx">
+      <div id="impMsg" style="font-size:12.5px;line-height:1.5;margin-bottom:6px;"></div>
+      <div class="modal-actions">
+        <button class="btn" id="impCancel">Cancelar</button>
+        <button class="btn primary" id="impOk" disabled>Importar</button>
+      </div>`;
+    overlay.style.display = 'flex';
+    let parsed = null;
+    const msg = box.querySelector('#impMsg'), ok = box.querySelector('#impOk');
+    // evita que listeners de modais anteriores fechem este ao clicar fora
+    const block = e=>{ if(e.target===overlay) e.stopImmediatePropagation(); };
+    overlay.addEventListener('click', block, true);
+    function close(v){ overlay.removeEventListener('click', block, true); box.style.maxWidth = ''; overlay.style.display = 'none'; box.innerHTML = ''; resolve(v); }
+    box.querySelector('#impCancel').addEventListener('click', ()=>close(null));
+    ok.addEventListener('click', ()=>{
+      if(!parsed) return;
+      const nomeEl = box.querySelector('#impNome');
+      if(nomeEl) parsed.nome = (nomeEl.value||'').trim() || parsed.nome || 'Obra importada';
+      close(parsed);
+    });
+    box.querySelector('#impFile').addEventListener('change', async ev=>{
+      parsed = null; ok.disabled = true;
+      const file = ev.target.files[0];
+      if(!file){ msg.innerHTML = ''; return; }
+      msg.innerHTML = '<span style="color:var(--text-faint)">Lendo planilha…</span>';
+      try{
+        const wb = XLSX.read(await file.arrayBuffer(), {type:'array'});
+        const res = parseOrcamentoImport(wb);
+        msg.innerHTML = importSummaryHtml(res);
+        if(!res.errors.length){
+          parsed = res; ok.disabled = false;
+          const nomeEl = box.querySelector('#impNome');
+          if(nomeEl && !nomeEl.value && res.nome) nomeEl.value = res.nome;
+        }
+      }catch(err){
+        console.error(err);
+        msg.innerHTML = '<span style="color:var(--red)">Não consegui ler esse arquivo. Envie a planilha modelo preenchida, em .xlsx.</span>';
+      }
+    });
+  });
+}
+
+/* Coloca o orçamento importado no projeto atual (já resetado/novo) */
+function applyOrcamentoImport(parsed){
+  nextOrcId = 1;
+  orcamento = parsed.rows.map(p=>{
+    const r = newOrcRow(p.level);
+    Object.assign(r, p.fields);
+    const code = parseInt(r.sinapiCode,10);
+    if(p.level==='subitem' && code && DB.items[code]){
+      if(p.usaSinapi) applySinapiPricing(r);
+      else if(!r.unidade) r.unidade = DB.items[code][1] || '';
+    }
+    return r;
+  });
+  bdiPercent = parsed.bdi || 0;
+  const el = document.getElementById('bdiPercent');
+  if(el) el.value = bdiPercent;
+}
+
+/* Botão "Importação de orçamento" (aba Orçamento): cria um novo projeto com o orçamento da planilha */
+async function importOrcamentoNovoProjeto(){
+  const res = await openImportOrcamentoModal({askName:true});
+  if(!res) return;
+  currentProjectId = crypto.randomUUID();
+  try{ localStorage.setItem(LOCAL_PTR_KEY, currentProjectId); }catch(e){}
+  resetProjectState();
+  try{ await loadAcabamentosSistemaIntoRevestimentos(); }catch(e){ console.error('Acabamentos do sistema:', e); }
+  applyConfig({nome: res.nome, createdAt: new Date().toISOString()});
+  applyOrcamentoImport(res);
+  renderCalendarTab();
+  recalcAll();
+  await doSaveProject();
+  showToast(`Obra "${res.nome}" criada com ${res.counts.subitem} subitem(ns) importado(s).`);
 }
 
 /* ============================================================
@@ -6727,6 +7068,7 @@ function setupTopbar(){
   document.getElementById('btnNewProject').addEventListener('click', createNewProject);
   document.getElementById('projectSelect').addEventListener('change', (e)=> switchProject(e.target.value));
   document.getElementById('btnAddOrcItem').addEventListener('click', addOrcRowGlobal);
+  document.getElementById('btnImportOrcamento').addEventListener('click', importOrcamentoNovoProjeto);
 
   document.getElementById('btnUpdateSinapi').addEventListener('click', ()=> document.getElementById('sinapiUpload').click());
   document.getElementById('sinapiUpload').addEventListener('change', async (e)=>{
@@ -6751,6 +7093,10 @@ function setupTopbar(){
 }
 
 (async function init(){
+  const acesso = await Auth.require(); // só segue depois de autenticado e autorizado
+  document.body.classList.remove('auth-pending');
+  document.getElementById('userInfo').textContent = acesso.email;
+  document.getElementById('btnLogout').addEventListener('click', ()=> Auth.logout());
   calendar = defaultCalendar();
   setupTabs();
   setupTopbar();
@@ -6776,7 +7122,8 @@ function setupTopbar(){
   setupConfigTab();
   await loadSinapi();
   const had = await loadProject();
-  loadSistemaGlobal();
+  await loadSistemaGlobal();
+  aplicarAcessoUsuario(acesso);
   renderCalendarTab();
   document.getElementById('bdiPercent').value = bdiPercent;
   if(!had) applyConfig({nome:'Jardins di Roma · Módulo 4', createdAt: new Date().toISOString()});

@@ -1,7 +1,7 @@
 /* ============================================================
    auth.js — Login do Qorban Controle (Supabase Auth via REST)
    - Só e-mails cadastrados (admins ou menu Acessos) criam senha.
-   - Primeiro acesso e "Esqueceu a senha": código por e-mail → nova senha.
+   - Primeiro acesso e "Esqueceu a senha": link por e-mail → nova senha.
    - "Manter conectado": sessão em localStorage com renovação automática.
    Nenhuma senha fica no código nem no banco de dados do app.
    ============================================================ */
@@ -80,7 +80,7 @@ const Auth = (function(){
   function view(html){ $('authBox').innerHTML = html + '<div id="authMsg" class="auth-msg"></div>'; }
   const MSG_SEM_ACESSO = 'Este e-mail não tem acesso ao Controle. Clientes devem usar o Portal do Cliente.';
   let avisoInicial = '';
-  const MSG_CODIGO = 'Se este e-mail estiver cadastrado, enviamos um código de verificação. Confira também o spam.';
+  const MSG_CODIGO = 'Se este e-mail estiver cadastrado, enviamos um link de acesso. Confira também o spam.';
 
   function telaLogin(email){
     view(`<h2>Entrar</h2>
@@ -92,17 +92,16 @@ const Auth = (function(){
   }
   function telaPedirCodigo(modo, email){
     view(`<h2>${modo==='primeiro' ? 'Primeiro acesso' : 'Esqueceu a senha'}</h2>
-      <p>Informe o e-mail cadastrado pela empresa. Enviaremos um código de verificação para você criar ${modo==='primeiro' ? 'sua senha' : 'uma nova senha'}.</p>
+      <p>Informe o e-mail cadastrado pela empresa. Enviaremos um link de acesso para você criar ${modo==='primeiro' ? 'sua senha' : 'uma nova senha'}.</p>
       <input type="email" id="aEmail" class="cell" placeholder="E-mail" autocomplete="username" value="${esc(email||'')}">
-      <button class="btn primary" id="aEnviar">Enviar código</button>
+      <button class="btn primary" id="aEnviar">Enviar link</button>
       <div class="auth-links"><a id="aVoltar">Voltar ao login</a></div>`);
   }
-  function telaCodigo(email){
-    view(`<h2>Digite o código</h2>
-      <p>Enviamos um código para <b>${esc(email)}</b>. Ele vale por pouco tempo.</p>
-      <input type="text" id="aCodigo" class="cell" placeholder="Código de verificação" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
-      <button class="btn primary" id="aVerificar">Verificar</button>
-      <div class="auth-links"><a id="aReenviar">Reenviar código</a><a id="aVoltar">Voltar ao login</a></div>`);
+  function telaLinkEnviado(email){
+    view(`<h2>Verifique seu e-mail</h2>
+      <p>Enviamos um e-mail para <b>${esc(email)}</b>. Clique em <b>"Sign in"</b> no e-mail: você volta para cá para criar a senha.</p>
+      <p>O link vale por pouco tempo e só pode ser usado uma vez. Confira também o spam.</p>
+      <div class="auth-links"><a id="aReenviar">Reenviar link</a><a id="aVoltar">Voltar ao login</a></div>`);
   }
   function telaNovaSenha(){
     view(`<h2>Crie sua senha</h2>
@@ -116,14 +115,15 @@ const Auth = (function(){
   async function pedirCodigo(email){
     const r = await fetch('/api/auth-solicitar-codigo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
     if(r.status === 400) throw new Error('Informe um e-mail válido.');
-    if(!r.ok) throw new Error('Não foi possível enviar o código agora. Tente novamente.');
+    if(!r.ok) throw new Error('Não foi possível enviar o link agora. Tente novamente.');
   }
 
-  function loginFlow(){
+  function loginFlow(opts){
+    opts = opts || {};
     return new Promise(resolve => {
       const overlay = $('authOverlay');
       overlay.style.display = 'flex';
-      let pendente = null; // sessão criada pelo código, ainda sem senha definida
+      let pendente = opts.pendente || null; // sessão criada pelo link do e-mail, ainda sem senha definida
       let emailAtual = '';
 
       async function concluir(s){
@@ -144,7 +144,7 @@ const Auth = (function(){
         const a = $('aReenviar'); if(!a) return;
         let n = 60; a.style.pointerEvents = 'none'; a.style.opacity = '.5';
         clearInterval(cooldownTimer);
-        cooldownTimer = setInterval(()=>{ n--; a.textContent = n > 0 ? `Reenviar código (${n}s)` : 'Reenviar código'; if(n <= 0){ clearInterval(cooldownTimer); a.style.pointerEvents = ''; a.style.opacity = ''; } }, 1000);
+        cooldownTimer = setInterval(()=>{ n--; a.textContent = n > 0 ? `Reenviar link (${n}s)` : 'Reenviar link'; if(n <= 0){ clearInterval(cooldownTimer); a.style.pointerEvents = ''; a.style.opacity = ''; } }, 1000);
       }
 
       overlay.onclick = async ev => {
@@ -172,15 +172,7 @@ const Auth = (function(){
             const e = email(); if(!e){ setMsg('Informe o e-mail.'); return; }
             busy(true); emailAtual = e;
             await pedirCodigo(e);
-            telaCodigo(e); setMsg(MSG_CODIGO, true); iniciarCooldown();
-          }
-          if(id === 'aVerificar'){
-            const c = $('aCodigo').value.trim(); if(!c){ setMsg('Digite o código recebido por e-mail.'); return; }
-            busy(true);
-            try{
-              const j = await gotrue('verify', { type: 'email', email: emailAtual, token: c });
-              pendente = j; telaNovaSenha();
-            }catch(err){ busy(false); setMsg('Código inválido ou expirado. Peça um novo código.'); }
+            telaLinkEnviado(e); setMsg(MSG_CODIGO, true); iniciarCooldown();
           }
           if(id === 'aSalvar'){
             const n1 = $('aNova').value, n2 = $('aNova2').value;
@@ -199,12 +191,35 @@ const Auth = (function(){
         if(ev.key !== 'Enter') return;
         const b = overlay.querySelector('#aEntrar, #aEnviar, #aVerificar, #aSalvar'); if(b) b.click();
       };
-      telaLogin(''); if(avisoInicial){ setMsg(avisoInicial); avisoInicial = ''; }
+      if(pendente) telaNovaSenha(); else telaLogin('');
+      if(avisoInicial){ setMsg(avisoInicial); avisoInicial = ''; }
     });
   }
 
+  /* O e-mail do Supabase traz um link que volta para o site com a sessão no endereço (#access_token=...). */
+  function lerLinkDoEmail(){
+    const h = (location.hash || '').replace(/^#/, '');
+    if(!h || (h.indexOf('access_token=') < 0 && h.indexOf('error=') < 0)) return null;
+    const p = new URLSearchParams(h);
+    history.replaceState(null, '', location.pathname + location.search);
+    if(p.get('error')) return { erro: p.get('error_code') === 'otp_expired' ? 'Link expirado ou já usado. Peça um novo link.' : 'Link inválido. Peça um novo link.' };
+    if(p.get('access_token') && p.get('refresh_token')){
+      return { session: { access_token: p.get('access_token'), refresh_token: p.get('refresh_token'),
+        expires_at: parseInt(p.get('expires_at'), 10) || Math.floor(Date.now()/1000) + (parseInt(p.get('expires_in'), 10) || 3600) } };
+    }
+    return null;
+  }
+  api._lerLink = lerLinkDoEmail;
+
   /* Ponto de entrada: devolve {email, admin} só depois de autenticado E autorizado. */
   api.require = async function(){
+    const link = lerLinkDoEmail();
+    if(link && link.session){
+      try{
+        const u = await gotrue('user', null, link.session.access_token, 'GET');
+        return loginFlow({ pendente: Object.assign({}, link.session, { user: u }) });
+      }catch(e){ avisoInicial = 'Link expirado ou já usado. Peça um novo link.'; }
+    } else if(link && link.erro){ avisoInicial = link.erro; }
     const s = stored();
     if(s && s.refresh_token){
       sess = s;
